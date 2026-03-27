@@ -40,24 +40,36 @@ function rewriteM3U8(m3uContent, sourceUrl, appUrl, referrer, ua) {
   const baseUrl = sourceUrl.substring(0, sourceUrl.lastIndexOf('/') + 1)
   const origin  = (() => { try { return new URL(sourceUrl).origin } catch { return '' } })()
 
+  function toProxy(url) {
+    let absoluteUrl
+    if (/^https?:\/\//i.test(url)) {
+      absoluteUrl = url
+    } else if (url.startsWith('/')) {
+      absoluteUrl = origin + url
+    } else {
+      absoluteUrl = baseUrl + url
+    }
+    const p = new URL(`${appUrl}/api/proxy/stream`)
+    p.searchParams.set('url', absoluteUrl)
+    if (referrer) p.searchParams.set('referrer', referrer)
+    if (ua)       p.searchParams.set('ua', ua)
+    return p.toString()
+  }
+
   return m3uContent.split('\n').map(line => {
     const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) return line
+    if (!trimmed) return line
 
-    let absoluteUrl
-    if (/^https?:\/\//i.test(trimmed)) {
-      absoluteUrl = trimmed
-    } else if (trimmed.startsWith('/')) {
-      absoluteUrl = origin + trimmed
-    } else {
-      absoluteUrl = baseUrl + trimmed
+    // Réécrire URI= dans les tags HLS (#EXT-X-MEDIA, #EXT-X-I-FRAME-STREAM-INF…)
+    if (trimmed.startsWith('#') && trimmed.includes('URI="')) {
+      return line.replace(/URI="([^"]+)"/g, (_, uri) => 'URI="' + toProxy(uri) + '"')
     }
 
-    const proxyUrl = new URL(`${appUrl}/api/proxy/stream`)
-    proxyUrl.searchParams.set('url', absoluteUrl)
-    if (referrer) proxyUrl.searchParams.set('referrer', referrer)
-    if (ua)       proxyUrl.searchParams.set('ua', ua)
-    return proxyUrl.toString()
+    // Ignorer les autres commentaires
+    if (trimmed.startsWith('#')) return line
+
+    // Réécrire les segments/sous-playlists
+    return toProxy(trimmed)
   }).join('\n')
 }
 
