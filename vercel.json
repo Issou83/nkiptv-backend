@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node",
+      "config": { "maxLambdaSize": "50mb" }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/proxy/(.*)",
+      "dest": "/server.js",
+      "headers": {
+        "Access-Control-Allow-Origin": "*"
+      }
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/server.js"
+    }
+  ],
+  "env": {
+    "MONGODB_URI": "@nkiptv_mongodb_uri",
+    "JWT_SECRET": "@nkiptv_jwt_secret",
+    "JWT_REFRESH_SECRET": "@nkiptv_jwt_refresh_secret",
+    "FRONTEND_URL": "@nkiptv_frontend_url",
+    "STRIPE_SECRET_KEY": "@nkiptv_stripe_secret",
+    "STRIPE_WEBHOOK_SECRET": "@nkiptv_stripe_webhook_secret",
+    "STRIPE_PRICE_PREMIUM": "@nkiptv_stripe_price_premium",
+    "STRIPE_PRICE_PRO": "@nkiptv_stripe_price_pro",
+    "NODE_ENV": "production",
+    "APP_URL": "@nkiptv_app_url"
+  },
+  "functions": {
+    "server.js": {
+      "maxDuration": 60
+    }
+  }
+}
