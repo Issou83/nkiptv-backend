@@ -130,16 +130,22 @@ app.listen(PORT, () => {
     }
   })
 
-  // Première sync au démarrage si la DB est vide
+  // Sync au démarrage si DB vide, données périmées (>23h) ou FORCE_SYNC=true
   setTimeout(async () => {
-    const Channel = require('./models/Channel')
-    const count = await Channel.countDocuments().catch(() => 0)
-    if (count === 0) {
-      console.log('📺 Base vide — première synchronisation...')
+    const Channel  = require('./models/Channel')
+    const count    = await Channel.countDocuments().catch(() => 0)
+    const last     = await Channel.findOne({}, { lastSyncedAt: 1 }).sort({ lastSyncedAt: -1 }).lean().catch(() => null)
+    const staleMs  = 23 * 60 * 60 * 1000  // 23h
+    const isStale  = !last?.lastSyncedAt || (Date.now() - new Date(last.lastSyncedAt).getTime()) > staleMs
+    const force    = process.env.FORCE_SYNC === 'true'
+
+    if (count === 0 || isStale || force) {
+      const reason = count === 0 ? 'Base vide' : force ? 'FORCE_SYNC activé' : 'Données périmées (>23h)'
+      console.log(`📺 ${reason} — synchronisation en cours...`)
       const { sync } = require('./services/iptvSync')
       sync().catch(err => console.error('Sync initiale échouée:', err.message))
     } else {
-      console.log(`📺 ${count} chaînes en base`)
+      console.log(`📺 ${count} chaînes en base (sync récente)`)
     }
   }, 3000)
 })
