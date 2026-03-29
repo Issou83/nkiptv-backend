@@ -23,8 +23,6 @@ const { promisify }    = require('util')
 const cron             = require('node-cron')
 const DiscoveredStream = require('../models/DiscoveredStream')
 const { healInactiveStreams } = require('./StreamHealer')
-const { healInactiveStreams } = require('./StreamHealer')
-const { healInactiveStreams } = require('./StreamHealer')
 
 const execFileAsync = promisify(execFile)
 
