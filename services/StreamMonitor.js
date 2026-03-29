@@ -22,6 +22,9 @@ const { execFile }     = require('child_process')
 const { promisify }    = require('util')
 const cron             = require('node-cron')
 const DiscoveredStream = require('../models/DiscoveredStream')
+const { healInactiveStreams } = require('./StreamHealer')
+const { healInactiveStreams } = require('./StreamHealer')
+const { healInactiveStreams } = require('./StreamHealer')
 
 const execFileAsync = promisify(execFile)
 
@@ -311,6 +314,7 @@ function startScheduler () {
   // Flux "inactive" : toutes les 4 heures (tentative de rÃ©cupÃ©ration)
   cron.schedule('0 */4 * * *', async () => {
     await runCycle('inactive', RECHECK_INACTIVE_MS)
+    try { await healInactiveStreams() } catch (e) { console.error('[StreamMonitor] Healer error:', e.message) }
   })
 
   // Premier passage immÃ©diat sur les "pending"
