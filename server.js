@@ -17,10 +17,10 @@ const app = express()
 const PORT = process.env.PORT || 3001
 const NODE_ENV = process.env.NODE_ENV || 'development'
 
-// ── Connexion DB ────────────────────────────────────────────────────────────────────────────
+// ── Connexion DB ──────────────────────────────────────────────────────────────
 connectDB()
 
-// ── Sécurité ────────────────────────────────────────────────────────────────────────────────
+// ── Sécurité ──────────────────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
   contentSecurityPolicy: false,   // Désactivé pour le streaming HLS
@@ -43,7 +43,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }))
 
-// ── Middleware généraux ────────────────────────────────────────────────────────────────────────────
+// ── Middleware généraux ────────────────────────────────────────────────────────
 app.use(compression())
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'))
 
@@ -51,7 +51,8 @@ app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'))
 app.use('/api/subscriptions/webhook', express.raw({ type: 'application/json' }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
-// ── Rate limiting ──────────────────────────────────────────────────────────────────────────────
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
 // API générale : 500 req / 15 min par IP
 // ⚠️  NE PAS appliquer à /api/proxy : un stream HLS fait ~30 req/min
 //     (refresh manifest + segments vidéo + segments audio) → dépasserait en < 2 min.
@@ -74,7 +75,7 @@ app.use('/api', apiLimiter)
 app.use('/auth/login', authLimiter)
 app.use('/auth/register', authLimiter)
 
-// ── Routes ────────────────────────────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/auth',          require('./routes/auth'))
 app.use('/api/channels',  require('./routes/channels'))
 app.use('/api/proxy',     require('./routes/proxy'))
@@ -85,7 +86,8 @@ app.use('/api/playlists', require('./routes/playlists'))
 app.use('/api/subscriptions', require('./routes/subscriptions'))
 app.use('/api/admin',     require('./routes/admin'))
 app.use('/api/streams',   require('./routes/streams'))   // Observatoire des flux découverts
-// ── Health check ──────────────────────────────────────────────────────────────────────────────
+
+// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
   const mongoose = require('mongoose')
   res.json({
@@ -99,12 +101,12 @@ app.get('/api/health', async (req, res) => {
   })
 })
 
-// ── 404 ────────────────────────────────────────────────────────────────────────────────────
+// ── 404 ────────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} introuvable` })
 })
 
-// ── Gestion d'erreurs globale ─────────────────────────────────────────────────────────────────
+// ── Gestion d'erreurs globale ─────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Error:', err.message)
   if (err.message?.includes('CORS')) {
@@ -115,7 +117,8 @@ app.use((err, req, res, next) => {
     message: NODE_ENV === 'production' ? 'Erreur interne' : err.message,
   })
 })
-// ── Démarrage du serveur ────────────────────────────────────────────────────────────────────────────
+
+// ── Démarrage du serveur ──────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n🚀 NKiptv API v2.0 démarrée sur le port ${PORT} [${NODE_ENV}]`)
   console.log(`   → Health : http://localhost:${PORT}/api/health\n`)
@@ -146,9 +149,27 @@ app.listen(PORT, () => {
     // Seed des chaînes françaises directes (BFM, TV5MONDE, France24, etc.)
     const { seedIfNeeded } = require('./services/seedFrenchChannels')
     seedIfNeeded().catch(err => console.error('Seed FR échoué:', err.message))
+
+    // Migration one-shot : corrige les bestStreamUrl DASH → HLS
+    const dashCount = await Channel.countDocuments({ bestStreamUrl: { $regex: /\.mpd$/i } }).catch(() => 0)
+    if (dashCount > 0) {
+      console.log(`🔧 Migration DASH→HLS : ${dashCount} chaîne(s) à corriger...`)
+      const channels = await Channel.find({ bestStreamUrl: { $regex: /\.mpd$/i } }).catch(() => [])
+      let fixed = 0
+      for (const ch of channels) {
+        const hlsStream = (ch.streams || []).find(s => s.url && s.url.includes('.m3u8'))
+        if (hlsStream) {
+          ch.bestStreamUrl = hlsStream.url
+          ch.proxyUrl = `${process.env.APP_URL || 'https://nkiptv-backend-production.up.railway.app'}/api/proxy/stream?url=${encodeURIComponent(hlsStream.url)}`
+          await ch.save().catch(() => {})
+          fixed++
+        }
+      }
+      console.log(`✅ Migration terminée : ${fixed}/${dashCount} corrigée(s)`)
+    }
   }, 3000)
 
-  // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────────────────────
+  // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────
   if (process.env.OBSERVATORY_ENABLED !== 'false') {
     const { startScheduler: startMonitor } = require('./services/StreamMonitor')
     const { startScheduler: startHealer  } = require('./services/AutoHealer')
