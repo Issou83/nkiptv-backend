@@ -5,6 +5,7 @@ const { optionalAuth } = require('../middleware/auth')
 const router = express.Router()
 
 const TIMEOUT = 30000
+const CDN_TIMEOUT_MS = 12000   // AbortController : abandon CDN après 12 s
 const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 
 const isBlockedHost = (url) => {
@@ -63,18 +64,36 @@ router.get('/stream', optionalAuth, async (req, res) => {
   }
 
   try {
-    // Une seule requête en mode stream — évite le double-fetch pour les segments binaires
-    const upstream = await axios.get(decoded, {
-      timeout: TIMEOUT,
-      responseType: 'stream',
-      headers: {
-        'User-Agent': 'VLC/3.0.0 LibVLC/3.0.0',
-        'Accept': '*/*',
-        'Accept-Encoding': 'identity',
-        'Referer': decoded,
-      },
-      maxRedirects: 5,
-    })
+    // AbortController : coupe la connexion CDN si elle tarde trop (évite que Railway
+    // attende 30 s et que HLS.js déclenche audioTrackLoadTimeOut côté client)
+    const controller = new AbortController()
+    const cdnTimer = setTimeout(() => controller.abort(), CDN_TIMEOUT_MS)
+    const t0 = Date.now()
+
+    let upstream
+    try {
+      upstream = await axios.get(decoded, {
+        timeout: TIMEOUT,
+        responseType: 'stream',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'VLC/3.0.0 LibVLC/3.0.0',
+          'Accept': '*/*',
+          'Accept-Encoding': 'identity',
+          'Referer': decoded,
+        },
+        maxRedirects: 5,
+      })
+    } catch (fetchErr) {
+      clearTimeout(cdnTimer)
+      if (fetchErr.code === 'ERR_CANCELED' || fetchErr.name === 'AbortError') {
+        console.warn(`[proxy] CDN timeout (>${CDN_TIMEOUT_MS}ms) for ${decoded.slice(0, 80)}`)
+        return res.status(504).json({ success: false, message: `CDN timeout après ${CDN_TIMEOUT_MS / 1000}s` })
+      }
+      throw fetchErr
+    }
+    clearTimeout(cdnTimer)
+    console.log(`[proxy] CDN responded in ${Date.now() - t0}ms — ${decoded.slice(0, 80)}`)
 
     const contentType = upstream.headers['content-type'] || ''
     const isM3U8 = contentType.includes('mpegurl') || contentType.includes('m3u') ||
