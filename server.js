@@ -44,7 +44,14 @@ app.use(cors({
 }))
 
 // ── Middleware généraux ────────────────────────────────────────────────────────
-app.use(compression())
+app.use(compression({
+  filter: (req, res) => {
+    // Ne pas compresser les routes proxy HLS : la compression bufferise les streams
+    // et crée des stalls cycliques de 4-6 s sur les chaînes live
+    if (req.path.startsWith('/api/proxy')) return false
+    return compression.filter(req, res)
+  },
+}))
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'))
 
 // Webhook Stripe doit recevoir le raw body AVANT express.json()
