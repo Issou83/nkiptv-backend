@@ -3,11 +3,26 @@ const mongoose = require('mongoose')
 const StreamSchema = new mongoose.Schema({
   url: { type: String, required: true },
   quality: { type: String, default: 'unknown' }, // SD, HD, FHD, 4K
-  status: { type: String, enum: ['online', 'offline', 'checking', 'unknown'], default: 'unknown' },
+  status: {
+    type: String,
+    enum: ['online', 'offline', 'checking', 'unknown', 'active', 'inactive', 'error'],
+    default: 'unknown',
+  },
+  // Type de source — détermine la stratégie de guérison (StreamHealer)
+  source_origin: {
+    type: String,
+    enum: ['cdn-public', 'custom-web-player', 'github-community', 'direct-ip', 'xtream-codes', 'rtmp', 'unknown'],
+    default: 'unknown',
+  },
+  fallbackUrls: [String],   // URLs alternatives si la principale tombe
   httpReferrer: String,
   userAgent: String,
   lastCheck: Date,
   responseTime: Number,  // ms
+  // Métadonnées de guérison (remplis par StreamHealer)
+  healedAt:   Date,
+  healedFrom: String,    // ancienne URL avant guérison
+  strategy:   String,    // stratégie utilisée
 }, { _id: false })
 
 const ChannelSchema = new mongoose.Schema({
