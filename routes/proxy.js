@@ -63,6 +63,24 @@ router.get('/stream', optionalAuth, async (req, res) => {
     return res.status(403).json({ success: false, message: 'Hôte non autorisé' })
   }
 
+  // ── HLS Blocking Playlist Reload (RFC 8216bis) ────────────────────────────
+  // Le CDN viamotionhsi.netplus.ch supporte le blocking reload : il retient la
+  // réponse jusqu'au prochain segment live (6-8 s) quand _HLS_msn/_HLS_part sont
+  // présents. Via Railway, cette attente bloquante dépasse les timeouts HLS.js.
+  // Solution : supprimer ces params → le CDN répond immédiatement avec la
+  // playlist courante, sans bloquer.
+  let fetchUrl = decoded
+  try {
+    const u = new URL(decoded)
+    if (u.searchParams.has('_HLS_msn') || u.searchParams.has('_HLS_part') || u.searchParams.has('_HLS_skip')) {
+      u.searchParams.delete('_HLS_msn')
+      u.searchParams.delete('_HLS_part')
+      u.searchParams.delete('_HLS_skip')
+      fetchUrl = u.toString()
+      console.log(`[proxy] stripped HLS blocking params → ${fetchUrl.slice(0, 80)}`)
+    }
+  } catch (_) { /* URL parse failed — use decoded as-is */ }
+
   try {
     // AbortController : coupe la connexion CDN si elle tarde trop (évite que Railway
     // attende 30 s et que HLS.js déclenche audioTrackLoadTimeOut côté client)
@@ -72,7 +90,7 @@ router.get('/stream', optionalAuth, async (req, res) => {
 
     let upstream
     try {
-      upstream = await axios.get(decoded, {
+      upstream = await axios.get(fetchUrl, {
         timeout: TIMEOUT,
         responseType: 'stream',
         signal: controller.signal,
@@ -87,13 +105,13 @@ router.get('/stream', optionalAuth, async (req, res) => {
     } catch (fetchErr) {
       clearTimeout(cdnTimer)
       if (fetchErr.code === 'ERR_CANCELED' || fetchErr.name === 'AbortError') {
-        console.warn(`[proxy] CDN timeout (>${CDN_TIMEOUT_MS}ms) for ${decoded.slice(0, 80)}`)
+        console.warn(`[proxy] CDN timeout (>${CDN_TIMEOUT_MS}ms) for ${fetchUrl.slice(0, 80)}`)
         return res.status(504).json({ success: false, message: `CDN timeout après ${CDN_TIMEOUT_MS / 1000}s` })
       }
       throw fetchErr
     }
     clearTimeout(cdnTimer)
-    console.log(`[proxy] CDN responded in ${Date.now() - t0}ms — ${decoded.slice(0, 80)}`)
+    console.log(`[proxy] CDN responded in ${Date.now() - t0}ms — ${fetchUrl.slice(0, 80)}`)
 
     const contentType = upstream.headers['content-type'] || ''
     const isM3U8 = contentType.includes('mpegurl') || contentType.includes('m3u') ||
