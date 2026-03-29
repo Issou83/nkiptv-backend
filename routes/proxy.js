@@ -15,6 +15,35 @@ const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50, maxFreeSockets: 20 })
 const httpAgent  = new http.Agent({  keepAlive: true, maxSockets: 50, maxFreeSockets: 20 })
 
+// ── Live playlist trimmer ──────────────────────────────────────────────────────
+// CDN comme viamotionhsi servent 970+ segments (170 KB). On garde les 10 derniers.
+const MAX_LIVE_SEGMENTS = 10
+
+function trimLivePlaylist(body) {
+  const lines = body.split("\n")
+  const header = []
+  const segBlocks = []
+  let cur = []
+  let inHeader = true
+  let origSeq = 0
+  for (const line of lines) {
+    const t = line.trim()
+    if (!t) continue
+    if (t.startsWith("#EXT-X-MEDIA-SEQUENCE:")) { origSeq = parseInt(t.split(":")[1]); continue }
+    if (inHeader) {
+      if (t.startsWith("#EXTINF")) { inHeader = false; cur.push(line) }
+      else { header.push(line) }
+    } else {
+      cur.push(line)
+      if (!t.startsWith("#")) { segBlocks.push(cur); cur = [] }
+    }
+  }
+  if (segBlocks.length <= MAX_LIVE_SEGMENTS) return body
+  const dropped = segBlocks.length - MAX_LIVE_SEGMENTS
+  const kept = segBlocks.slice(dropped)
+  const newSeq = origSeq + dropped
+  return [...header, "#EXT-X-MEDIA-SEQUENCE:" + newSeq, ...kept.flat()].join("\n")
+}
 const isBlockedHost = (url) => {
   try {
     const host = new URL(url).hostname
@@ -142,11 +171,13 @@ router.get('/stream', optionalAuth, async (req, res) => {
         return `${appUrl}/api/proxy/stream?url=${encodeURIComponent(abs)}`
       }
 
-      const rewritten = body.split('\n').map(line => {
+      const isM3U8live = !body.includes('#EXT-X-ENDLIST')
+                const bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
+                const rewritten = bodyToRewrite.split('\n').map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
         if (trimmed.startsWith('#')) {
-          return line.replace(/URI="([^"]+)"/g, (_, uri) => `UPB�"${proxify(uri)}"`)
+          return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxify(uri)}"`)
         }
         return proxify(trimmed)
       }).join('\n')
