@@ -1,5 +1,5 @@
 /**
- * NKiptv Backend â Serveur principal Express
+ * NKiptv Backend — Serveur principal Express
  * Port: 3001 (dev) | Variable d'env PORT (prod)
  */
 require('dotenv').config()
@@ -17,11 +17,13 @@ const app = express()
 const PORT = process.env.PORT || 3001
 const NODE_ENV = process.env.NODE_ENV || 'development'
 
+// ── Connexion DB ────────────────────────────────────────────────────────────────────────────
 connectDB()
 
+// ── Sécurité ────────────────────────────────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: false,   // Désactivé pour le streaming HLS
 }))
 
 app.use(cors({
@@ -32,28 +34,34 @@ app.use(cors({
       'http://localhost:5173',
       /\.vercel\.app$/,
     ]
-    if (!origin) return cb(null, true)
+    if (!origin) return cb(null, true)  // Postman, curl
     const ok = allowed.some(p => (p instanceof RegExp ? p.test(origin) : p === origin))
-    cb(ok ? null : new Error('CORS: origine non autorisÃ©e'), ok)
+    cb(ok ? null : new Error('CORS: origine non autorisée'), ok)
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }))
 
+// ── Middleware généraux ────────────────────────────────────────────────────────────────────────────
 app.use(compression())
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'))
 
+// Webhook Stripe doit recevoir le raw body AVANT express.json()
 app.use('/api/subscriptions/webhook', express.raw({ type: 'application/json' }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
-
+// ── Rate limiting ──────────────────────────────────────────────────────────────────────────────
+// API générale : 500 req / 15 min par IP
+// ⚠️  NE PAS appliquer à /api/proxy : un stream HLS fait ~30 req/min
+//     (refresh manifest + segments vidéo + segments audio) → dépasserait en < 2 min.
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: NODE_ENV === 'development' ? 1000 : 200,
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: NODE_ENV === 'development' ? 5000 : 500,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, message: 'Trop de requÃªtes, rÃ©essayez dans 15 minutes' },
+  message: { success: false, message: 'Trop de requêtes, réessayez dans 15 minutes' },
+  skip: (req) => req.path.startsWith('/proxy'),  // Exclure le streaming HLS
 })
 
 const authLimiter = rateLimit({
@@ -66,6 +74,7 @@ app.use('/api', apiLimiter)
 app.use('/auth/login', authLimiter)
 app.use('/auth/register', authLimiter)
 
+// ── Routes ────────────────────────────────────────────────────────────────────────────────
 app.use('/auth',          require('./routes/auth'))
 app.use('/api/channels',  require('./routes/channels'))
 app.use('/api/proxy',     require('./routes/proxy'))
@@ -75,63 +84,86 @@ app.use('/api/epg',       require('./routes/epg'))
 app.use('/api/playlists', require('./routes/playlists'))
 app.use('/api/subscriptions', require('./routes/subscriptions'))
 app.use('/api/admin',     require('./routes/admin'))
-app.use('/api/streams',   require('./routes/streams'))
-
+app.use('/api/streams',   require('./routes/streams'))   // Observatoire des flux découverts
+// ── Health check ──────────────────────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
   const mongoose = require('mongoose')
   res.json({
-    success: true, status: 'ok', version: '2.0.0', env: NODE_ENV,
+    success: true,
+    status: 'ok',
+    version: '2.0.0',
+    env: NODE_ENV,
     db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    uptime: process.uptime(), timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
   })
 })
 
+// ── 404 ────────────────────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} introuvable` })
 })
 
+// ── Gestion d'erreurs globale ─────────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Error:', err.message)
   if (err.message?.includes('CORS')) {
-    return res.status(403).json({ success: false, message: 'CORS: origine non autorisÃ©e' })
+    return res.status(403).json({ success: false, message: 'CORS: origine non autorisée' })
   }
   res.status(err.status || 500).json({
     success: false,
     message: NODE_ENV === 'production' ? 'Erreur interne' : err.message,
   })
 })
-
+// ── Démarrage du serveur ────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\nð NKiptv API v2.0 dÃ©marrÃ©e sur le port ${PORT} [${NODE_ENV}]`)
-  console.log(`   â Health : http://localhost:${PORT}/api/health\n`)
+  console.log(`\n🚀 NKiptv API v2.0 démarrée sur le port ${PORT} [${NODE_ENV}]`)
+  console.log(`   → Health : http://localhost:${PORT}/api/health\n`)
 
+  // Synchronisation automatique toutes les 12h
   const syncHours = parseInt(process.env.SYNC_INTERVAL_HOURS) || 12
   cron.schedule(`0 */${syncHours} * * *`, async () => {
-    try { const { sync } = require('./services/iptvSync'); await sync() }
-    catch (err) { console.error('Sync Ã©chouÃ©e:', err.message) }
+    console.log('⏰ Lancement sync planifiée...')
+    try {
+      const { sync } = require('./services/iptvSync')
+      await sync()
+    } catch (err) {
+      console.error('Sync planifiée échouée:', err.message)
+    }
   })
 
+  // Première sync au démarrage si la DB est vide + seed chaînes FR
   setTimeout(async () => {
     const Channel = require('./models/Channel')
     const count = await Channel.countDocuments().catch(() => 0)
     if (count === 0) {
+      console.log('📺 Base vide — première synchronisation...')
       const { sync } = require('./services/iptvSync')
-      sync().catch(err => console.error('Sync initiale:', err.message))
+      sync().catch(err => console.error('Sync initiale échouée:', err.message))
+    } else {
+      console.log(`📺 ${count} chaînes en base`)
     }
+    // Seed des chaînes françaises directes (BFM, TV5MONDE, France24, etc.)
     const { seedIfNeeded } = require('./services/seedFrenchChannels')
-    seedIfNeeded().catch(err => console.error('Seed FR:', err.message))
+    seedIfNeeded().catch(err => console.error('Seed FR échoué:', err.message))
   }, 3000)
 
+  // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────────────────────
   if (process.env.OBSERVATORY_ENABLED !== 'false') {
     const { startScheduler: startMonitor } = require('./services/StreamMonitor')
     const { startScheduler: startHealer  } = require('./services/AutoHealer')
     startMonitor()
     startHealer()
+
+    // Découverte GitHub toutes les 24h si activée
     if (process.env.DISCOVERY_ENABLED === 'true') {
-      const dh = parseInt(process.env.DISCOVERY_INTERVAL_HOURS) || 24
-      cron.schedule(`0 0 */${dh} * *`, () => {
-        require('./services/SourceDiscovery').discover().catch(e => console.error(e))
+      const discoveryHours = parseInt(process.env.DISCOVERY_INTERVAL_HOURS) || 24
+      cron.schedule(`0 0 */${discoveryHours} * *`, async () => {
+        console.log('🔭 Lancement découverte planifiée...')
+        const { discover } = require('./services/SourceDiscovery')
+        discover().catch(err => console.error('Découverte échouée:', err.message))
       })
+      console.log(`🔭 Découverte automatique activée (toutes les ${discoveryHours}h)`)
     }
   }
 })
