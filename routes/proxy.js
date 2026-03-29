@@ -93,21 +93,34 @@ router.get('/stream', optionalAuth, async (req, res) => {
       const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`
       const baseUrl = decoded.substring(0, decoded.lastIndexOf('/') + 1)
 
+      // Helper: make any URL absolute then proxify it
+      const proxify = (rawUrl) => {
+        let abs
+        if (/^https?:\/\//i.test(rawUrl)) {
+          abs = rawUrl
+        } else if (rawUrl.startsWith('/')) {
+          abs = new URL(decoded).origin + rawUrl
+        } else {
+          abs = baseUrl + rawUrl
+        }
+        return `${appUrl}/api/proxy/stream?url=${encodeURIComponent(abs)}`
+      }
+
       const rewritten = body.split('\n').map(line => {
         const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) return line
+        if (!trimmed) return line
 
-        let absoluteUrl
-        if (/^https?:\/\//i.test(trimmed)) {
-          absoluteUrl = trimmed
-        } else if (trimmed.startsWith('/')) {
-          const origin = new URL(decoded).origin
-          absoluteUrl = origin + trimmed
-        } else {
-          absoluteUrl = baseUrl + trimmed
+        // ── HLS tag lines (start with #) ────────────────────────────────────
+        // Rewrite URI="..." attributes inside tags such as:
+        //   #EXT-X-MEDIA:TYPE=AUDIO,...,URI="audio.m3u8"
+        //   #EXT-X-KEY:METHOD=AES-128,URI="key.bin"
+        //   #EXT-X-MAP:URI="init.mp4"
+        if (trimmed.startsWith('#')) {
+          return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxify(uri)}"`)
         }
 
-        return `${appUrl}/api/proxy/stream?url=${encodeURIComponent(absoluteUrl)}`
+        // ── Segment / sub-manifest URL lines ────────────────────────────────
+        return proxify(trimmed)
       }).join('\n')
 
       res.set({
