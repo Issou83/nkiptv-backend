@@ -200,7 +200,6 @@ router.post('/forgot-password', async (req, res) => {
     await user.save()
 
     // TODO: envoyer l'email avec le token
-    console.log(`Reset token for ${email}: ${token}`)
     res.json({ success: true, message: 'Si cet email existe, un lien vous a été envoyé' })
   } catch (err) {
     res.status(500).json({ success: false, message: 'Erreur serveur' })
