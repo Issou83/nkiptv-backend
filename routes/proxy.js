@@ -44,11 +44,28 @@ function trimLivePlaylist(body) {
   const newSeq = origSeq + dropped
   return [...header, "#EXT-X-MEDIA-SEQUENCE:" + newSeq, ...kept.flat()].join("\n")
 }
+
 const isBlockedHost = (url) => {
   try {
     const host = new URL(url).hostname
     return BLOCKED_HOSTS.includes(host) || host.startsWith('192.168.') || host.startsWith('10.')
   } catch { return true }
+}
+
+// ── Détection M3U8 fiable ─────────────────────────────────────────────────────
+// BUG CORRIGÉ : decoded.includes('.m3u8') capturait les segments dont l'URL
+// contient .m3u8 dans le chemin (ex: cdn.com/stream.m3u8/seg001.ts → faux positif).
+// On vérifie maintenant l'extension de pathname uniquement.
+const detectM3U8 = (decoded, contentType) => {
+  // Content-Type est la source la plus fiable
+  if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u'))) return true
+  // Vérifier uniquement l'extension finale du chemin URL
+  try {
+    const pathname = new URL(decoded).pathname.toLowerCase()
+    return pathname.endsWith('.m3u8') || pathname.endsWith('.m3u')
+  } catch {
+    return false
+  }
 }
 
 // ── GET /api/proxy/best/:channelId ────────────────────────────────────────────
@@ -85,7 +102,7 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
 // ── GET /api/proxy/stream ─────────────────────────────────────────────────────
 // Proxy d'une URL directe (passée en paramètre)
 // Pour les playlists M3U8 : réécrit les URLs relatives ET absolues vers le proxy
-// Pour les segments binaires (.ts) : pipe en streaming direct (zéro buffering)
+// Pour les segments binaires (.ts) : bufférise et envoie avec Content-Length (fiable avec CDN)
 router.get('/stream', optionalAuth, async (req, res) => {
   const { url, country } = req.query
   if (!url) return res.status(400).json({ success: false, message: 'URL requise' })
@@ -136,7 +153,7 @@ router.get('/stream', optionalAuth, async (req, res) => {
       clearTimeout(cdnTimer)
       if (fetchErr.code === 'ERR_CANCELED' || fetchErr.name === 'AbortError') {
         console.warn(`[proxy] CDN timeout (>${CDN_TIMEOUT_MS}ms) for ${fetchUrl.slice(0, 80)}`)
-        return res.status(504).json({ success: false, message: `CFN timeout après ${CDN_TIMEOUT_MS / 1000}s` })
+        return res.status(504).json({ success: false, message: `CDN timeout après ${CDN_TIMEOUT_MS / 1000}s` })
       }
       throw fetchErr
     }
@@ -144,8 +161,12 @@ router.get('/stream', optionalAuth, async (req, res) => {
     console.log(`[proxy] CDN responded in ${Date.now() - t0}ms — ${fetchUrl.slice(0, 80)}`)
 
     const contentType = upstream.headers['content-type'] || ''
-    const isM3U8 = contentType.includes('mpegurl') || contentType.includes('m3u') ||
-                   decoded.includes('.m3u8') || decoded.includes('.m3u')
+
+    // ── CORRECTION : détection M3U8 basée sur pathname uniquement ─────────────
+    // L'ancien code utilisait decoded.includes('.m3u8') qui capturait à tort les
+    // segments dont l'URL contient .m3u8 dans le chemin (pattern fréquent en IPTV :
+    // https://cdn.server.com/live/channel.m3u8/seg-000001.ts)
+    const isM3U8 = detectM3U8(decoded, contentType)
 
     if (isM3U8) {
       const chunks = []
@@ -172,12 +193,12 @@ router.get('/stream', optionalAuth, async (req, res) => {
       }
 
       const isM3U8live = !body.includes('#EXT-X-ENDLIST')
-                const bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
-                const rewritten = bodyToRewrite.split('\n').map(line => {
+      const bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
+      const rewritten = bodyToRewrite.split('\n').map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
         if (trimmed.startsWith('#')) {
-          return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxify(uri)}"`)
+          return line.replace(/URI="([^"]+)"/g, (_, uri) => `UPB="${proxify(uri)}"`)
         }
         return proxify(trimmed)
       }).join('\n')
@@ -190,22 +211,36 @@ router.get('/stream', optionalAuth, async (req, res) => {
       return res.send(rewritten)
     }
 
-    res.set({
-      'Content-Type': contentType || 'video/MP2T',
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'no-cache, no-store',
-      'X-Accel-Buffering': 'no',
-      'Content-Encoding': 'identity',
+    // ── CORRECTION : segments binaires — buffering au lieu de pipe ─────────────
+    // Le pipe() vers Railway/Fastly CDN peut rompre silencieusement (0 bytes reçus
+    // côté client) à cause du chunked transfer encoding sans Content-Length.
+    // On bufférise le segment entier, puis on envoie avec Content-Length explicite.
+    // Les segments HLS sont typiquement 200 KB–3 MB : acceptable en mémoire.
+    const segChunks = []
+    upstream.data.on('data', chunk => segChunks.push(chunk))
+    upstream.data.on('error', (err) => {
+      console.error(`[proxy] segment upstream error: ${err.message} — ${fetchUrl.slice(0, 80)}`)
+      if (!res.headersSent) {
+        res.status(502).json({ success: false, message: 'Erreur CDN segment' })
+      } else {
+        res.destroy()
+      }
     })
-    const upstreamLen = upstream.headers['content-length']
-    if (upstreamLen) res.setHeader('Content-Length', upstreamLen)
-    if (res.socket) res.socket.setNoDelay(true)
-    res.flushHeaders()
-    upstream.data.pipe(res)
-    upstream.data.on('error', () => { if (!res.headersSent) res.status(502).end() })
-    res.on('close', () => upstream.data.destroy())
+    upstream.data.on('end', () => {
+      const buf = Buffer.concat(segChunks)
+      console.log(`[proxy] segment OK ${buf.length} bytes — ${fetchUrl.slice(0, 60)}`)
+      if (res.headersSent) return
+      res.set({
+        'Content-Type': contentType || 'video/MP2T',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache, no-store',
+        'Content-Length': buf.length,
+      })
+      res.end(buf)
+    })
 
   } catch (err) {
+    console.error(`[proxy] stream error: ${err.message}`)
     if (!res.headersSent) res.status(502).json({ success: false, message: 'Stream inaccessible' })
   }
 })
