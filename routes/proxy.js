@@ -99,11 +99,31 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
   }
 })
 
-// ── GET /api/proxy/stream ─────────────────────────────────────────────────────
+// ── GET+HEAD /api/proxy/stream ────────────────────────────────────────────────
 // Proxy d'une URL directe (passée en paramètre)
 // Pour les playlists M3U8 : réécrit les URLs relatives ET absolues vers le proxy
 // Pour les segments binaires (.ts) : bufférise et envoie avec Content-Length (fiable avec CDN)
-router.get('/stream', optionalAuth, async (req, res) => {
+// HEAD : HLS.js sonde le proxy avant de charger les segments — on répond 200 immédiatement
+//        sans fetcher l'upstream, sinon HLS.js entre en boucle de retry et ne charge rien.
+router.all('/stream', optionalAuth, async (req, res) => {
+  // ── Réponse immédiate aux requêtes HEAD (sonde HLS.js) ─────────────────────
+  if (req.method === 'HEAD') {
+    const urlParam = req.query.url
+    const contentType = urlParam && (() => {
+      try {
+        const pathname = new URL(decodeURIComponent(urlParam)).pathname.toLowerCase()
+        return pathname.endsWith('.m3u8') || pathname.endsWith('.m3u')
+      } catch { return false }
+    })()
+      ? 'application/vnd.apple.mpegurl'
+      : 'video/MP2T'
+    return res.set({
+      'Content-Type': contentType,
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-cache',
+    }).status(200).end()
+  }
+
   const { url, country } = req.query
   if (!url) return res.status(400).json({ success: false, message: 'URL requise' })
 
