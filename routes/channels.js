@@ -71,7 +71,7 @@ router.get('/', optionalAuth, async (req, res) => {
     const channels = await query
       .skip((parseInt(page) - 1) * Math.min(parseInt(limit), 200))
       .limit(Math.min(parseInt(limit), 200))
-      .select('-__v -lastSyncedAt')
+      .select('-__v -lastSyncedAt -backend_code')
       .lean()
 
     res.json({
