@@ -118,12 +118,12 @@ const FRENCH_CHANNELS = [
     streams: [{ url: 'https://edge98.vedge.infomaniak.com/lancer/ck/m6/manifest/playlist.m3u8',
       quality: 'HD', status: 'unknown', source_origin: 'github-community', fallbackUrls: [] }] },
 
-  // C8
+  // C8 — licence définitivement révoquée par l'ARCOM en mars 2025
   { id: 'C8.fr', name: 'C8', categories: ['general'], languages: ['fra'], country: 'FR',
+    isActive: false,
     logo: 'https://upload.wikimedia.org/wikipedia/fr/thumb/f/f5/C8_Logo.png/800px-C8_Logo.png',
     website: 'https://www.c8.fr',
-    streams: [{ url: 'https://edge98.vedge.infomaniak.com/lancer/ck/c8/manifest/playlist.m3u8',
-      quality: 'HD', status: 'unknown', source_origin: 'github-community', fallbackUrls: [] }] },
+    streams: [] },
 
   // TMC
   { id: 'TMC.fr', name: 'TMC', categories: ['general'], languages: ['fra'], country: 'FR',
@@ -173,7 +173,8 @@ async function seedFrenchChannels () {
         $setOnInsert: { viewCount: 0, favoriteCount: 0, rating: 0, ratingCount: 0, source: 'manual', lastSyncedAt: new Date() },
         $set: { name: ch.name, country: ch.country, languages: ch.languages || [],
           categories: ch.categories || [], logo: ch.logo || '', website: ch.website || '',
-          streams: ch.streams || [], hasStream: (ch.streams || []).length > 0, isActive: true },
+          streams: ch.streams || [], hasStream: (ch.streams || []).length > 0,
+          isActive: ch.isActive !== undefined ? ch.isActive : true },
       },
       upsert: true,
     },
