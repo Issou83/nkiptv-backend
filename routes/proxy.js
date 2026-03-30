@@ -200,7 +200,7 @@ router.get('/stream', optionalAuth, async (req, res) => {
         const trimmed = line.trim()
         if (!trimmed) return line
         if (trimmed.startsWith('#')) {
-          return line.replace(/URI="([^"]+)"/g, (_, uri) => `UPB="${proxify(uri)}"`)
+          return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxify(uri)}"`)
         }
         return proxify(trimmed)
       }).join('\n')
