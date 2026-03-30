@@ -123,7 +123,7 @@ router.get('/channels', async (req, res) => {
 // ── PUT /api/admin/channels/:id ───────────────────────────────────────────────
 router.put('/channels/:id', async (req, res) => {
   try {
-    const allowed = ['name', 'isActive', 'isFeatured', 'isPremium', 'categories', 'logo']
+    const allowed = ['name', 'isActive', 'isFeatured', 'isPremium', 'categories', 'logo', 'streams']
     const update = {}
     for (const key of allowed) {
       if (req.body[key] !== undefined) update[key] = req.body[key]
