@@ -66,7 +66,11 @@ const ChannelSchema = new mongoose.Schema({
   source: { type: String, default: 'iptv-org' },  // iptv-org, manual, m3u-import
   isActive: { type: Boolean, default: true },
   isFeatured: { type: Boolean, default: false },
-  isPremium: { type: Boolean, default: false },    // Chaînes premium uniquement
+
+  // ── PREMIUM ───────────────────────────────────────────────────────────────
+  isPremium: { type: Boolean, default: false, index: true },  // Chaînes premium uniquement
+  update_pattern: { type: String, default: '' },              // Fréquence/règle de mise à jour
+  backend_code:   { type: String, default: '' },              // Code interne (admin only)
 
   // ── Sync ──────────────────────────────────────────────────────────────────
   lastSyncedAt: { type: Date, default: Date.now },
@@ -79,5 +83,6 @@ ChannelSchema.index({ categories: 1, hasStream: 1 })
 ChannelSchema.index({ name: 'text', altNames: 'text', network: 'text' })
 ChannelSchema.index({ viewCount: -1 })
 ChannelSchema.index({ isFeatured: 1, hasStream: 1 })
+ChannelSchema.index({ name: 1, isPremium: 1 })
 
 module.exports = mongoose.model('Channel', ChannelSchema)
