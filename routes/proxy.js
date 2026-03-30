@@ -193,7 +193,9 @@ router.get('/stream', optionalAuth, async (req, res) => {
       }
 
       const isM3U8live = !body.includes('#EXT-X-ENDLIST')
-      const bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
+      let bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
+      // Supprimer tous les EXT-X-PROGRAM-DATE-TIME (source de confusion live sync chez HLS.js)
+      bodyToRewrite = bodyToRewrite.split('\n').filter(l => !l.startsWith('#EXT-X-PROGRAM-DATE-TIME')).join('\n')
       const rewritten = bodyToRewrite.split('\n').map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
