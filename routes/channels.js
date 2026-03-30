@@ -48,9 +48,12 @@ router.get('/', optionalAuth, async (req, res) => {
     if (hasStream === 'true') filter.hasStream  = true
     if (featured  === 'true') filter.isFeatured = true
 
+    const searchActive = !!(search && search.trim())
+    const queryFilter  = searchActive ? { ...filter, $text: { $search: search } } : filter
+
     let query
-    if (search && search.trim()) {
-      query = Channel.find({ ...filter, $text: { $search: search } }, { score: { $meta: 'textScore' } })
+    if (searchActive) {
+      query = Channel.find(queryFilter)
       if (!sort || sort === 'relevance') query = query.sort({ score: { $meta: 'textScore' } })
     } else {
       query = Channel.find(filter)
@@ -64,7 +67,7 @@ router.get('/', optionalAuth, async (req, res) => {
     }
     if (sort !== 'relevance') query = query.sort(sortMap[sort] || { viewCount: -1 })
 
-    const total    = await Channel.countDocuments(filter)
+    const total    = await Channel.countDocuments(queryFilter)
     const channels = await query
       .skip((parseInt(page) - 1) * Math.min(parseInt(limit), 200))
       .limit(Math.min(parseInt(limit), 200))
