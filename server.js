@@ -82,6 +82,9 @@ app.use('/api', apiLimiter)
 app.use('/auth/login', authLimiter)
 app.use('/auth/register', authLimiter)
 
+// ── Health check (Render / UptimeRobot) ──────────────────────────────────────
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/auth',          require('./routes/auth'))
 app.use('/api/channels',  require('./routes/channels'))
