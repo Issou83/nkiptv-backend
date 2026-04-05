@@ -15,6 +15,22 @@ const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50, maxFreeSockets: 20 })
 const httpAgent  = new http.Agent({  keepAlive: true, maxSockets: 50, maxFreeSockets: 20 })
 
+// ── Helper CORS : appliqué sur TOUTES les réponses du proxy ──────────────────
+// Nécessaire pour que HLS.js charge les segments .ts sans blocage navigateur
+const setCorsHeaders = (res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type')
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range')
+}
+
+// ── Preflight OPTIONS ─────────────────────────────────────────────────────────
+router.options('*', (req, res) => {
+  setCorsHeaders(res)
+  res.setHeader('Access-Control-Max-Age', '86400')
+  res.status(204).end()
+})
+
 // ── Live playlist trimmer ──────────────────────────────────────────────────────
 // CDN comme viamotionhsi servent 970+ segments (170 KB). On garde les 10 derniers.
 const MAX_LIVE_SEGMENTS = 10
@@ -74,6 +90,7 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
   try {
     const channel = await Channel.findOne({ id: req.params.channelId, isActive: true, hasStream: true })
     if (!channel || !channel.streams?.length) {
+      setCorsHeaders(res)
       return res.status(404).json({ success: false, message: 'Aucun stream disponible' })
     }
 
@@ -92,10 +109,14 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
       } catch { continue }
     }
 
+    setCorsHeaders(res)
     res.status(503).json({ success: false, message: 'Tous les streams sont hors ligne' })
   } catch (err) {
     console.error('Proxy best error:', err.message)
-    if (!res.headersSent) res.status(500).json({ success: false, message: 'Erreur proxy' })
+    if (!res.headersSent) {
+      setCorsHeaders(res)
+      res.status(500).json({ success: false, message: 'Erreur proxy' })
+    }
   }
 })
 
@@ -117,22 +138,27 @@ router.all('/stream', optionalAuth, async (req, res) => {
     })()
       ? 'application/vnd.apple.mpegurl'
       : 'video/MP2T'
+    setCorsHeaders(res)
     return res.set({
       'Content-Type': contentType,
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'no-cache',
     }).status(200).end()
   }
 
   const { url, country } = req.query
-  if (!url) return res.status(400).json({ success: false, message: 'URL requise' })
+  if (!url) {
+    setCorsHeaders(res)
+    return res.status(400).json({ success: false, message: 'URL requise' })
+  }
 
   let decoded
   try { decoded = decodeURIComponent(url) } catch {
+    setCorsHeaders(res)
     return res.status(400).json({ success: false, message: 'URL invalide' })
   }
 
   if (isBlockedHost(decoded)) {
+    setCorsHeaders(res)
     return res.status(403).json({ success: false, message: 'Hôte non autorisé' })
   }
 
@@ -173,6 +199,7 @@ router.all('/stream', optionalAuth, async (req, res) => {
       clearTimeout(cdnTimer)
       if (fetchErr.code === 'ERR_CANCELED' || fetchErr.name === 'AbortError') {
         console.warn(`[proxy] CDN timeout (>${CDN_TIMEOUT_MS}ms) for ${fetchUrl.slice(0, 80)}`)
+        setCorsHeaders(res)
         return res.status(504).json({ success: false, message: `CDN timeout après ${CDN_TIMEOUT_MS / 1000}s` })
       }
       throw fetchErr
@@ -183,9 +210,6 @@ router.all('/stream', optionalAuth, async (req, res) => {
     const contentType = upstream.headers['content-type'] || ''
 
     // ── CORRECTION : détection M3U8 basée sur pathname uniquement ─────────────
-    // L'ancien code utilisait decoded.includes('.m3u8') qui capturait à tort les
-    // segments dont l'URL contient .m3u8 dans le chemin (pattern fréquent en IPTV :
-    // https://cdn.server.com/live/channel.m3u8/seg-000001.ts)
     const isM3U8 = detectM3U8(decoded, contentType)
 
     if (isM3U8) {
@@ -225,9 +249,9 @@ router.all('/stream', optionalAuth, async (req, res) => {
         return proxify(trimmed)
       }).join('\n')
 
+      setCorsHeaders(res)
       res.set({
         'Content-Type': 'application/x-mpegURL',
-        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache, no-store',
       })
       return res.send(rewritten)
@@ -236,13 +260,12 @@ router.all('/stream', optionalAuth, async (req, res) => {
     // ── CORRECTION : segments binaires — buffering au lieu de pipe ─────────────
     // Le pipe() vers Railway/Fastly CDN peut rompre silencieusement (0 bytes reçus
     // côté client) à cause du chunked transfer encoding sans Content-Length.
-    // On bufférise le segment entier, puis on envoie avec Content-Length explicite.
-    // Les segments HLS sont typiquement 200 KB–3 MB : acceptable en mémoire.
     const segChunks = []
     upstream.data.on('data', chunk => segChunks.push(chunk))
     upstream.data.on('error', (err) => {
       console.error(`[proxy] segment upstream error: ${err.message} — ${fetchUrl.slice(0, 80)}`)
       if (!res.headersSent) {
+        setCorsHeaders(res)
         res.status(502).json({ success: false, message: 'Erreur CDN segment' })
       } else {
         res.destroy()
@@ -252,9 +275,9 @@ router.all('/stream', optionalAuth, async (req, res) => {
       const buf = Buffer.concat(segChunks)
       console.log(`[proxy] segment OK ${buf.length} bytes — ${fetchUrl.slice(0, 60)}`)
       if (res.headersSent) return
+      setCorsHeaders(res)
       res.set({
         'Content-Type': contentType || 'video/MP2T',
-        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache, no-store',
         'Content-Length': buf.length,
       })
@@ -263,15 +286,69 @@ router.all('/stream', optionalAuth, async (req, res) => {
 
   } catch (err) {
     console.error(`[proxy] stream error: ${err.message}`)
-    if (!res.headersSent) res.status(502).json({ success: false, message: 'Stream inaccessible' })
+    if (!res.headersSent) {
+      setCorsHeaders(res)
+      res.status(502).json({ success: false, message: 'Stream inaccessible' })
+    }
+  }
+})
+
+// ── GET /api/proxy/logo ───────────────────────────────────────────────────────
+// Proxy server-side pour les logos Wikimedia (évite les 503 en direct)
+// Usage : /api/proxy/logo?url=<encoded_wikimedia_url>
+router.get('/logo', async (req, res) => {
+  const { url } = req.query
+  if (!url) {
+    setCorsHeaders(res)
+    return res.status(400).json({ success: false, message: 'URL requise' })
+  }
+
+  let decoded
+  try { decoded = decodeURIComponent(url) } catch {
+    setCorsHeaders(res)
+    return res.status(400).json({ success: false, message: 'URL invalide' })
+  }
+
+  if (isBlockedHost(decoded)) {
+    setCorsHeaders(res)
+    return res.status(403).json({ success: false, message: 'Hôte non autorisé' })
+  }
+
+  try {
+    const response = await axios.get(decoded, {
+      timeout: 10000,
+      responseType: 'arraybuffer',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NKiptv/2.0; +https://passiloc.fr)',
+        'Accept': 'image/*,*/*',
+      },
+      maxRedirects: 5,
+    })
+
+    const contentType = response.headers['content-type'] || 'image/png'
+    setCorsHeaders(res)
+    res.set({
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Length': response.data.byteLength,
+    })
+    res.end(Buffer.from(response.data))
+  } catch (err) {
+    console.error(`[proxy/logo] error: ${err.message} — ${decoded.slice(0, 80)}`)
+    setCorsHeaders(res)
+    res.status(502).json({ success: false, message: 'Logo inaccessible' })
   }
 })
 
 router.get('/m3u', optionalAuth, async (req, res) => {
   const { url } = req.query
-  if (!url) return res.status(400).json({ success: false, message: 'URL requise' })
+  if (!url) {
+    setCorsHeaders(res)
+    return res.status(400).json({ success: false, message: 'URL requise' })
+  }
   let decoded
   try { decoded = decodeURIComponent(url) } catch {
+    setCorsHeaders(res)
     return res.status(400).json({ success: false, message: 'URL invalide' })
   }
   try {
@@ -279,25 +356,33 @@ router.get('/m3u', optionalAuth, async (req, res) => {
     const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`
     let m3u = response.data
     m3u = m3u.replace(/(https?:\/\/[^\s"]+\.m3u8[^\s"]*)/g, (match) => `${baseUrl}/api/proxy/stream?url=${encodeURIComponent(match)}`)
+    setCorsHeaders(res)
     res.set('Content-Type', 'application/x-mpegURL')
     res.send(m3u)
   } catch (err) {
+    setCorsHeaders(res)
     res.status(502).json({ success: false, message: 'Impossible de récupérer la playlist' })
   }
 })
 
 router.get('/check', optionalAuth, async (req, res) => {
   const { url } = req.query
-  if (!url) return res.status(400).json({ success: false, message: 'URL requise' })
+  if (!url) {
+    setCorsHeaders(res)
+    return res.status(400).json({ success: false, message: 'URL requise' })
+  }
   let decoded
   try { decoded = decodeURIComponent(url) } catch {
+    setCorsHeaders(res)
     return res.status(400).json({ success: false, message: 'URL invalide' })
   }
   try {
     const start = Date.now()
     await axios.head(decoded, { timeout: 8000, headers: { 'User-Agent': 'VLC/3.0.0', 'Accept': '*/*' } })
+    setCorsHeaders(res)
     res.json({ success: true, online: true, responseTime: Date.now() - start })
   } catch {
+    setCorsHeaders(res)
     res.json({ success: true, online: false })
   }
 })
@@ -305,10 +390,15 @@ router.get('/check', optionalAuth, async (req, res) => {
 router.get('/resolve/:channelId', async (req, res) => {
   try {
     const channel = await Channel.findOne({ id: req.params.channelId, hasStream: true })
-    if (!channel) return res.status(404).json({ success: false, message: 'Chaîne introuvable' })
+    if (!channel) {
+      setCorsHeaders(res)
+      return res.status(404).json({ success: false, message: 'Chaîne introuvable' })
+    }
     const streams = channel.streams.filter(s => s.status !== 'offline')
+    setCorsHeaders(res)
     res.json({ success: true, data: { channelId: channel.id, name: channel.name, streams: streams.map(s => ({ url: s.url, quality: s.quality, status: s.status })) } })
   } catch (err) {
+    setCorsHeaders(res)
     res.status(500).json({ success: false, message: 'Erreur serveur' })
   }
 })
@@ -318,7 +408,8 @@ async function pipeStream(url, streamInfo, res) {
   if (streamInfo.httpReferrer) headers['Referer'] = streamInfo.httpReferrer
   const upstream = await axios({ method: 'GET', url, headers, responseType: 'stream', httpAgent, httpsAgent, timeout: TIMEOUT, maxRedirects: 5 })
   const contentType = upstream.headers['content-type'] || 'application/x-mpegURL'
-  res.set({ 'Content-Type': contentType, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no', 'Content-Encoding': 'identity' })
+  setCorsHeaders(res)
+  res.set({ 'Content-Type': contentType, 'Cache-Control': 'no-cache, no-store', 'X-Accel-Buffering': 'no', 'Content-Encoding': 'identity' })
   if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length'])
   if (res.socket) res.socket.setNoDelay(true)
   res.flushHeaders()
