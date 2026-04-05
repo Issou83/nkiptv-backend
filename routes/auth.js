@@ -6,10 +6,15 @@ const { auth } = require('../middleware/auth')
 const router = express.Router()
 
 const generateTokens = (userId) => {
-  const accessToken = jwt.sign({ userId }, process.env.JWT_SECRET, {
+  const jwtSecret = process.env.JWT_SECRET
+  const refreshSecret = process.env.JWT_REFRESH_SECRET || jwtSecret
+
+  if (!jwtSecret) throw new Error('JWT_SECRET non défini dans les variables d\'environnement')
+
+  const accessToken = jwt.sign({ userId }, jwtSecret, {
     expiresIn: process.env.JWT_ACCESS_EXPIRE || '15m',
   })
-  const refreshToken = jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET, {
+  const refreshToken = jwt.sign({ userId }, refreshSecret, {
     expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d',
   })
   return { accessToken, refreshToken }
@@ -47,8 +52,12 @@ router.post('/register', async (req, res) => {
       data: { user: user.toSafeJSON(), accessToken, refreshToken },
     })
   } catch (err) {
-    console.error('Register error:', err)
-    res.status(500).json({ success: false, message: 'Erreur serveur' })
+    console.error('Register error:', err.message, err.stack)
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur',
+      ...(process.env.NODE_ENV !== 'production' && { debug: err.message }),
+    })
   }
 })
 
@@ -86,8 +95,12 @@ router.post('/login', async (req, res) => {
       data: { user: user.toSafeJSON(), accessToken, refreshToken },
     })
   } catch (err) {
-    console.error('Login error:', err)
-    res.status(500).json({ success: false, message: 'Erreur serveur' })
+    console.error('Login error:', err.message, err.stack)
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur',
+      ...(process.env.NODE_ENV !== 'production' && { debug: err.message }),
+    })
   }
 })
 

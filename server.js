@@ -4,6 +4,17 @@
  */
 require('dotenv').config()
 
+// ── Validation des variables d'environnement critiques ────────────────────────
+const REQUIRED_ENV = ['MONGODB_URI', 'JWT_SECRET']
+const missingEnv = REQUIRED_ENV.filter(k => !process.env[k])
+if (missingEnv.length) {
+  console.error(`[FATAL] Variables d'environnement manquantes: ${missingEnv.join(', ')}`)
+  process.exit(1)
+}
+if (!process.env.JWT_REFRESH_SECRET) {
+  console.warn('[WARN] JWT_REFRESH_SECRET non défini — fallback sur JWT_SECRET pour les refresh tokens')
+}
+
 const express = require('express')
 const cors = require('cors')
 const helmet = require('helmet')
