@@ -343,6 +343,7 @@ router.get('/logo', async (req, res) => {
         // FIX BUG 1 : UA réaliste Chrome pour éviter le 503 de Wikimedia
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'image/*,*/*',
+        'Referer': 'https://fr.wikipedia.org/',
       },
       maxRedirects: 5,
     })
@@ -367,7 +368,7 @@ router.get('/logo', async (req, res) => {
   <polygon points="28,26 28,34 38,30" fill="#7ab3e0"/>
 </svg>`
     setCorsHeaders(res)
-    res.set({ 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=3600', 'X-Logo-Fallback': 'true' })
+    res.set({ 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store, no-cache', 'X-Logo-Fallback': 'true' })
     res.status(200).send(placeholderSvg)
   }
 })
