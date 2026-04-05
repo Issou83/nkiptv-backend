@@ -262,7 +262,7 @@ router.all('/stream', optionalAuth, async (req, res) => {
       let bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
       // Supprimer tous les EXT-X-PROGRAM-DATE-TIME (source de confusion live sync chez HLS.js)
       bodyToRewrite = bodyToRewrite.split('\n').filter(l => !l.startsWith('#EXT-X-PROGRAM-DATE-TIME')).join('\n')
-      const rewritten = bodyToRewrite.split('\n').map(line => {
+      let rewritten = bodyToRewrite.split('\n').map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
         if (trimmed.startsWith('#')) {
@@ -270,6 +270,11 @@ router.all('/stream', optionalAuth, async (req, res) => {
         }
         return proxify(trimmed)
       }).join('\n')
+
+      // Forcer VERSION 3 pour compatibilité MPEG-TS (les segments .ts ne sont pas fMP4)
+      rewritten = rewritten.replace(/#EXT-X-VERSION:\d+/g, '#EXT-X-VERSION:3')
+      // Supprimer EXT-X-INDEPENDENT-SEGMENTS incompatible VERSION 8
+      rewritten = rewritten.replace(/#EXT-X-INDEPENDENT-SEGMENTS\r?\n/g, '')
 
       setCorsHeaders(res)
       res.set({
