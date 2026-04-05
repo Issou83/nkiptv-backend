@@ -268,14 +268,7 @@ router.all('/stream', optionalAuth, async (req, res) => {
         if (trimmed.startsWith('#')) {
           return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxify(uri)}"`)
         }
-        // Réécrire via proxy UNIQUEMENT les sous-playlists (.m3u8)
-        if (trimmed.endsWith('.m3u8') || trimmed.includes('.m3u8?')) {
-          return proxify(trimmed)
-        }
-        // Pour les segments .ts (et autres), retourner l'URL absolue directement
-        if (/^https?:\/\//i.test(trimmed)) return trimmed
-        if (trimmed.startsWith('/')) return new URL(decoded).origin + trimmed
-        return baseUrl + trimmed
+        return proxify(trimmed)
       }).join('\n')
 
       setCorsHeaders(res)
