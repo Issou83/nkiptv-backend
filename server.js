@@ -13,6 +13,14 @@ const app = express()
 const PORT = process.env.PORT || 3001
 const NODE_ENV = process.env.NODE_ENV || 'development'
 
+// ── Vérification des variables d'environnement requises ───────────────────────
+const REQUIRED_ENV = ['MONGODB_URI', 'JWT_SECRET']
+REQUIRED_ENV.forEach(key => {
+  if (!process.env[key]) {
+    console.error(`[WARN] Variable d'env manquante: ${key} — certaines features seront cassées`)
+  }
+})
+
 // ── Connexion DB ──────────────────────────────────────────────────────────────
 connectDB()
 

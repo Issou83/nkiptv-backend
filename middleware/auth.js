@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken')
 const User = require('../models/User')
 
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_dev_secret_change_in_prod'
+
 // ── Vérifier le JWT ───────────────────────────────────────────────────────────
 const auth = async (req, res, next) => {
   try {
@@ -10,7 +12,7 @@ const auth = async (req, res, next) => {
     }
 
     const token = header.split(' ')[1]
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const decoded = jwt.verify(token, JWT_SECRET)
 
     const user = await User.findById(decoded.userId).select('-password -refreshTokens')
     if (!user) return res.status(401).json({ success: false, message: 'Utilisateur introuvable' })
@@ -33,7 +35,7 @@ const optionalAuth = async (req, res, next) => {
     const header = req.headers.authorization
     if (!header?.startsWith('Bearer ')) return next()
     const token = header.split(' ')[1]
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const decoded = jwt.verify(token, JWT_SECRET)
     const user = await User.findById(decoded.userId).select('-password -refreshTokens')
     if (user?.isActive) req.user = user
   } catch { /* ignore */ }

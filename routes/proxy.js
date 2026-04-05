@@ -7,7 +7,7 @@ const { optionalAuth } = require('../middleware/auth')
 const router = express.Router()
 
 const TIMEOUT = 30000
-const CDN_TIMEOUT_MS = 12000   // AbortController : abandon CDN après 12 s
+const CDN_TIMEOUT_MS = 30000   // AbortController : abandon CDN après 30 s
 const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 
 // ── Cache en mémoire pour les logos (évite les 429 Wikimedia) ────────────────
@@ -279,32 +279,18 @@ router.all('/stream', optionalAuth, async (req, res) => {
       return res.send(rewritten)
     }
 
-    // ── CORRECTION : segments binaires — buffering au lieu de pipe ─────────────
-    // Le pipe() vers Railway/Fastly CDN peut rompre silencieusement (0 bytes reçus
-    // côté client) à cause du chunked transfer encoding sans Content-Length.
-    const segChunks = []
-    upstream.data.on('data', chunk => segChunks.push(chunk))
+    // ── Segments binaires (.ts) : streaming par pipe ──────────────────────────
+    setCorsHeaders(res)
+    res.set({
+      'Content-Type': contentType || 'video/MP2T',
+      'Cache-Control': 'no-cache, no-store',
+    })
     upstream.data.on('error', (err) => {
       console.error(`[proxy] segment upstream error: ${err.message} — ${fetchUrl.slice(0, 80)}`)
-      if (!res.headersSent) {
-        setCorsHeaders(res)
-        res.status(502).json({ success: false, message: 'Erreur CDN segment' })
-      } else {
-        res.destroy()
-      }
+      if (!res.headersSent) res.status(502).end()
+      else res.destroy()
     })
-    upstream.data.on('end', () => {
-      const buf = Buffer.concat(segChunks)
-      console.log(`[proxy] segment OK ${buf.length} bytes — ${fetchUrl.slice(0, 60)}`)
-      if (res.headersSent) return
-      setCorsHeaders(res)
-      res.set({
-        'Content-Type': contentType || 'video/MP2T',
-        'Cache-Control': 'no-cache, no-store',
-        'Content-Length': buf.length,
-      })
-      res.end(buf)
-    })
+    upstream.data.pipe(res)
 
   } catch (err) {
     console.error(`[proxy] stream error: ${err.message}`)

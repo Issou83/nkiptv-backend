@@ -5,11 +5,14 @@ const User = require('../models/User')
 const { auth } = require('../middleware/auth')
 const router = express.Router()
 
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_dev_secret_change_in_prod'
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'fallback_dev_secret_change_in_prod'
+
 const generateTokens = (userId) => {
-  const accessToken = jwt.sign({ userId }, process.env.JWT_SECRET, {
+  const accessToken = jwt.sign({ userId }, JWT_SECRET, {
     expiresIn: process.env.JWT_ACCESS_EXPIRE || '15m',
   })
-  const refreshToken = jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET, {
+  const refreshToken = jwt.sign({ userId }, JWT_REFRESH_SECRET, {
     expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d',
   })
   return { accessToken, refreshToken }
@@ -99,7 +102,7 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Refresh token manquant' })
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET)
+    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET)
     const user = await User.findById(decoded.userId)
     if (!user) return res.status(401).json({ success: false, message: 'Utilisateur introuvable' })
 

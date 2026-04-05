@@ -100,8 +100,8 @@ UserSchema.index({ 'plan.type': 1 })
 UserSchema.index({ createdAt: -1 })
 
 // ── Hachage mot de passe ──────────────────────────────────────────────────────
-UserSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next()
+UserSchema.pre('save', async function () {
+  if (!this.isModified('password')) return
   const salt = await bcrypt.genSalt(12)
   this.password = await bcrypt.hash(this.password, salt)
   // Créer le profil par défaut si premier save
@@ -109,7 +109,6 @@ UserSchema.pre('save', async function (next) {
     this.profiles.push({ name: this.name, avatar: '👤' })
     this.activeProfileId = this.profiles[0]._id
   }
-  next()
 })
 
 // ── Méthodes ──────────────────────────────────────────────────────────────────
