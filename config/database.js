@@ -9,6 +9,8 @@ const connectDB = async () => {
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       serverSelectionTimeoutMS: 10000,
       socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+      retryWrites: true,
     })
     isConnected = true
     console.log(`✅ MongoDB connecté : ${conn.connection.host}`)
@@ -20,7 +22,14 @@ const connectDB = async () => {
 
 mongoose.connection.on('disconnected', () => {
   isConnected = false
-  console.warn('⚠️  MongoDB déconnecté')
+  console.warn('[MongoDB] Déconnecté — tentative de reconnexion...')
+})
+mongoose.connection.on('reconnected', () => {
+  isConnected = true
+  console.log('[MongoDB] Reconnecté ✅')
+})
+mongoose.connection.on('error', (err) => {
+  console.error('[MongoDB] Erreur connexion:', err.message)
 })
 
 module.exports = connectDB
