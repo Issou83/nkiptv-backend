@@ -373,8 +373,16 @@ router.get('/logo', async (req, res) => {
     res.end(logoBuf)
   } catch (err) {
     console.error(`[proxy/logo] error: ${err.message} — ${decoded.slice(0, 80)}`)
+    // Retourner un placeholder SVG générique au lieu d'un 502 (évite les images cassées dans le UI)
+    const placeholderSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="8" fill="#1e2a3a"/>
+  <rect x="12" y="16" width="40" height="28" rx="3" fill="#2d3f56"/>
+  <circle cx="32" cy="30" r="8" fill="#4a6080"/>
+  <polygon points="28,26 28,34 38,30" fill="#7ab3e0"/>
+</svg>`
     setCorsHeaders(res)
-    res.status(502).json({ success: false, message: 'Logo inaccessible' })
+    res.set({ 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=3600', 'X-Logo-Fallback': 'true' })
+    res.status(200).send(placeholderSvg)
   }
 })
 
