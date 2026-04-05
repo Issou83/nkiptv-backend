@@ -319,8 +319,9 @@ router.get('/logo', async (req, res) => {
       timeout: 10000,
       responseType: 'arraybuffer',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; NKiptv/2.0; +https://passiloc.fr)',
-        'Accept': 'image/*,*/*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+        'Referer': 'https://www.wikipedia.org/',
       },
       maxRedirects: 5,
     })
