@@ -10,6 +10,24 @@ const TIMEOUT = 30000
 const CDN_TIMEOUT_MS = 12000   // AbortController : abandon CDN après 12 s
 const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 
+// ── Cache en mémoire pour les logos (évite les 429 Wikimedia) ────────────────
+const LOGO_CACHE_TTL = 24 * 60 * 60 * 1000 // 24h
+const LOGO_CACHE_MAX = 500
+const logoCache = new Map()
+const getCachedLogo = (url) => {
+  const entry = logoCache.get(url)
+  if (!entry) return null
+  if (Date.now() - entry.ts > LOGO_CACHE_TTL) { logoCache.delete(url); return null }
+  return entry
+}
+const setCachedLogo = (url, data, contentType) => {
+  if (logoCache.size >= LOGO_CACHE_MAX) {
+    const oldest = [...logoCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]
+    if (oldest) logoCache.delete(oldest[0])
+  }
+  logoCache.set(url, { data, contentType, ts: Date.now() })
+}
+
 // ── Agents HTTP avec keep-alive pour réutiliser les connexions TCP/TLS ─────────
 // Sans ça, chaque segment crée une nouvelle connexion → +100-200ms de latence/segment
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50, maxFreeSockets: 20 })
@@ -318,7 +336,20 @@ router.get('/logo', async (req, res) => {
     return res.status(403).json({ success: false, message: 'Hôte non autorisé' })
   }
 
-  try {
+// Vérifier le cache
+  const cached = getCachedLogo(decoded)
+  if (cached) {
+    setCorsHeaders(res)
+    res.set({
+      'Content-Type': cached.contentType,
+      'Cache-Control': 'public, max-age=86400',
+      'Content-Length': cached.data.byteLength,
+      'X-Cache': 'HIT',
+    })
+    return res.end(cached.data)
+  }
+
+    try {
     const response = await axios.get(decoded, {
       timeout: 10000,
       responseType: 'arraybuffer',
@@ -337,7 +368,9 @@ router.get('/logo', async (req, res) => {
       'Cache-Control': 'public, max-age=86400',
       'Content-Length': response.data.byteLength,
     })
-    res.end(Buffer.from(response.data))
+    const logoBuf = Buffer.from(response.data)
+    setCachedLogo(decoded, logoBuf, contentType)
+    res.end(logoBuf)
   } catch (err) {
     console.error(`[proxy/logo] error: ${err.message} — ${decoded.slice(0, 80)}`)
     setCorsHeaders(res)
