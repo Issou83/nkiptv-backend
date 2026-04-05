@@ -14,26 +14,26 @@ const StreamSchema = new mongoose.Schema({
     enum: ['cdn-public', 'custom-web-player', 'github-community', 'direct-ip', 'xtream-codes', 'rtmp', 'unknown'],
     default: 'unknown',
   },
-  fallbackUrls: [String],   // URLs alternatives si la principale tombe
+  fallbackUrls: [String],  // URLs alternatives si la principale tombe
   httpReferrer: String,
   userAgent: String,
   lastCheck: Date,
-  responseTime: Number,  // ms
+  responseTime: Number,    // ms
   // Métadonnées de guérison (remplis par StreamHealer)
-  healedAt:   Date,
-  healedFrom: String,    // ancienne URL avant guérison
-  strategy:   String,    // stratégie utilisée
+  healedAt: Date,
+  healedFrom: String,      // ancienne URL avant guérison
+  strategy: String,        // stratégie utilisée
 }, { _id: false })
 
 const ChannelSchema = new mongoose.Schema({
-  // ── Identifiants ──────────────────────────────────────────────────────────
-  id: { type: String, required: true, unique: true },  // ex: CNN.us
+  // ── Identifiants ────────────────────────────────────────────────────────────
+  id: { type: String, required: true, unique: true }, // ex: CNN.us
   name: { type: String, required: true },
   altNames: [String],
   network: String,
   owners: [String],
 
-  // ── Métadonnées ────────────────────────────────────────────────────────────
+  // ── Métadonnées ───────────────────────────────────────────────────────────
   country: { type: String, index: true },
   subdivision: String,
   city: String,
@@ -42,14 +42,14 @@ const ChannelSchema = new mongoose.Schema({
   categories: [{ type: String, index: true }],
   isNsfw: { type: Boolean, default: false },
 
-  // ── Médias ─────────────────────────────────────────────────────────────────
+  // ── Médias ────────────────────────────────────────────────────────────────
   logo: String,
   website: String,
 
   // ── Streams ───────────────────────────────────────────────────────────────
   streams: [StreamSchema],
   hasStream: { type: Boolean, default: false, index: true },
-  bestStreamUrl: String,     // URL du meilleur stream testé
+  bestStreamUrl: String,   // URL du meilleur stream testé
   lastStreamCheck: Date,
 
   // ── EPG ───────────────────────────────────────────────────────────────────
@@ -63,18 +63,22 @@ const ChannelSchema = new mongoose.Schema({
   ratingCount: { type: Number, default: 0 },
 
   // ── Source ────────────────────────────────────────────────────────────────
-  source: { type: String, default: 'iptv-org' },  // iptv-org, manual, m3u-import
+  source: { type: String, default: 'iptv-org' }, // iptv-org, manual, m3u-import
   isActive: { type: Boolean, default: true },
   isFeatured: { type: Boolean, default: false },
 
   // ── PREMIUM ───────────────────────────────────────────────────────────────
-  isPremium: { type: Boolean, default: false, index: true },  // Chaînes premium uniquement
-  update_pattern: { type: String, default: '' },              // Fréquence/règle de mise à jour
-  backend_code:   { type: String, default: '' },              // Code interne (admin only)
+  isPremium: { type: Boolean, default: false, index: true },
+  update_pattern: { type: String, default: '' },
+  backend_code: { type: String, default: '' },
+
+  // ── Stream Healer ─────────────────────────────────────────────────────────
+  status: { type: String, enum: ['up', 'down'], default: 'up', index: true },
+  failCount: { type: Number, default: 0 },
+  lastChecked: { type: Date },
 
   // ── Sync ──────────────────────────────────────────────────────────────────
   lastSyncedAt: { type: Date, default: Date.now },
-
 }, { timestamps: true })
 
 // ── Index composés ────────────────────────────────────────────────────────────
