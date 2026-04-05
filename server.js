@@ -181,10 +181,12 @@ app.listen(PORT, () => {
 
   // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────
   if (process.env.OBSERVATORY_ENABLED !== 'false') {
-    const { startScheduler: startMonitor } = require('./services/StreamMonitor')
-    const { startScheduler: startHealer  } = require('./services/AutoHealer')
+    const { startScheduler: startMonitor  } = require('./services/StreamMonitor')
+    const { startScheduler: startHealer   } = require('./services/AutoHealer')
+    const { startScheduler: startChannelHealer } = require('./services/streamHealerScheduler')
     startMonitor()
     startHealer()
+    startChannelHealer()
 
     // Découverte GitHub toutes les 24h si activée
     if (process.env.DISCOVERY_ENABLED === 'true') {
