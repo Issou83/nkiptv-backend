@@ -22,21 +22,12 @@ app.use(helmet({
   contentSecurityPolicy: false, // Désactivé pour le streaming HLS
 }))
 
+// CORS : origin '*' requis pour que HLS.js charge les segments .ts sans blocage
 app.use(cors({
-  origin: (origin, cb) => {
-    const allowed = [
-      process.env.FRONTEND_URL,
-      'http://localhost:3000',
-      'http://localhost:5173',
-      /\.vercel\.app$/,
-    ]
-    if (!origin) return cb(null, true) // Postman, curl
-    const ok = allowed.some(p => (p instanceof RegExp ? p.test(origin) : p === origin))
-    cb(ok ? null : new Error('CORS: origine non autorisée'), ok)
-  },
-  credentials: true,
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
+  exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range'],
 }))
 
 // ── Middleware généraux ───────────────────────────────────────────────────────
