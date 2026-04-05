@@ -1,9 +1,5 @@
-/**
- * NKiptv Backend — Serveur principal Express
- * Port: 3001 (dev) | Variable d'env PORT (prod)
- */
+/** * NKiptv Backend — Serveur principal Express * Port: 3001 (dev) | Variable d'env PORT (prod) */
 require('dotenv').config()
-
 const express = require('express')
 const cors = require('cors')
 const helmet = require('helmet')
@@ -23,7 +19,7 @@ connectDB()
 // ── Sécurité ──────────────────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: false,   // Désactivé pour le streaming HLS
+  contentSecurityPolicy: false, // Désactivé pour le streaming HLS
 }))
 
 app.use(cors({
@@ -34,7 +30,7 @@ app.use(cors({
       'http://localhost:5173',
       /\.vercel\.app$/,
     ]
-    if (!origin) return cb(null, true)  // Postman, curl
+    if (!origin) return cb(null, true) // Postman, curl
     const ok = allowed.some(p => (p instanceof RegExp ? p.test(origin) : p === origin))
     cb(ok ? null : new Error('CORS: origine non autorisée'), ok)
   },
@@ -43,15 +39,14 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }))
 
-// ── Middleware généraux ────────────────────────────────────────────────────────
+// ── Middleware généraux ───────────────────────────────────────────────────────
 app.use(compression({
   filter: (req, res) => {
-    // Ne pas compresser les routes proxy HLS : la compression bufferise les streams
-    // et crée des stalls cycliques de 4-6 s sur les chaînes live
     if (req.path.startsWith('/api/proxy')) return false
     return compression.filter(req, res)
   },
 }))
+
 app.use(morgan(NODE_ENV === 'production' ? 'combined' : 'dev'))
 
 // Webhook Stripe doit recevoir le raw body AVANT express.json()
@@ -60,16 +55,13 @@ app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-// API générale : 500 req / 15 min par IP
-// ⚠️  NE PAS appliquer à /api/proxy : un stream HLS fait ~30 req/min
-//     (refresh manifest + segments vidéo + segments audio) → dépasserait en < 2 min.
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: NODE_ENV === 'development' ? 5000 : 500,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Trop de requêtes, réessayez dans 15 minutes' },
-  skip: (req) => req.path.startsWith('/proxy'),  // Exclure le streaming HLS
+  skip: (req) => req.path.startsWith('/proxy'),
 })
 
 const authLimiter = rateLimit({
@@ -86,16 +78,16 @@ app.use('/auth/register', authLimiter)
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.use('/auth',          require('./routes/auth'))
-app.use('/api/channels',  require('./routes/channels'))
-app.use('/api/proxy',     require('./routes/proxy'))
+app.use('/auth', require('./routes/auth'))
+app.use('/api/channels', require('./routes/channels'))
+app.use('/api/proxy', require('./routes/proxy'))
 app.use('/api/favorites', require('./routes/favorites'))
-app.use('/api/profiles',  require('./routes/profiles'))
-app.use('/api/epg',       require('./routes/epg'))
+app.use('/api/profiles', require('./routes/profiles'))
+app.use('/api/epg', require('./routes/epg'))
 app.use('/api/playlists', require('./routes/playlists'))
 app.use('/api/subscriptions', require('./routes/subscriptions'))
-app.use('/api/admin',     require('./routes/admin'))
-app.use('/api/streams',   require('./routes/streams'))   // Observatoire des flux découverts
+app.use('/api/admin', require('./routes/admin'))
+app.use('/api/streams', require('./routes/streams'))
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
@@ -111,9 +103,9 @@ app.get('/api/health', async (req, res) => {
   })
 })
 
-// ── 404 ────────────────────────────────────────────────────────────────────────
+// ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} introuvable` })
+  res.status(404).json({ success: false, message: 'Route ' + req.method + ' ' + req.path + ' introuvable' })
 })
 
 // ── Gestion d'erreurs globale ─────────────────────────────────────────────────
@@ -130,73 +122,77 @@ app.use((err, req, res, next) => {
 
 // ── Démarrage du serveur ──────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n🚀 NKiptv API v2.0 démarrée sur le port ${PORT} [${NODE_ENV}]`)
-  console.log(`   → Health : http://localhost:${PORT}/api/health\n`)
+  console.log('NKiptv API v2.0 demarree sur le port ' + PORT + ' [' + NODE_ENV + ']')
+  console.log(' -> Health : http://localhost:' + PORT + '/api/health')
 
   // Synchronisation automatique toutes les 12h
   const syncHours = parseInt(process.env.SYNC_INTERVAL_HOURS) || 12
-  cron.schedule(`0 */${syncHours} * * *`, async () => {
-    console.log('⏰ Lancement sync planifiée...')
+  cron.schedule('0 */' + syncHours + ' * * *', async () => {
+    console.log('Lancement sync planifiee...')
     try {
       const { sync } = require('./services/iptvSync')
       await sync()
     } catch (err) {
-      console.error('Sync planifiée échouée:', err.message)
+      console.error('Sync planifiee echouee:', err.message)
     }
   })
 
-  // Première sync au démarrage si la DB est vide + seed chaînes FR
   setTimeout(async () => {
     const Channel = require('./models/Channel')
     const count = await Channel.countDocuments().catch(() => 0)
     if (count === 0) {
-      console.log('📺 Base vide — première synchronisation...')
+      console.log('Base vide - premiere synchronisation...')
       const { sync } = require('./services/iptvSync')
-      sync().catch(err => console.error('Sync initiale échouée:', err.message))
+      sync().catch(err => console.error('Sync initiale echouee:', err.message))
     } else {
-      console.log(`📺 ${count} chaînes en base`)
+      console.log(count + ' chaines en base')
     }
-    // Seed des chaînes françaises directes (BFM, TV5MONDE, France24, etc.)
+
+    // Seed des chaînes françaises directes
     const { seedIfNeeded } = require('./services/seedFrenchChannels')
-    seedIfNeeded().catch(err => console.error('Seed FR échoué:', err.message))
+    seedIfNeeded().catch(err => console.error('Seed FR echoue:', err.message))
 
     // Migration one-shot : corrige les bestStreamUrl DASH → HLS
     const dashCount = await Channel.countDocuments({ bestStreamUrl: { $regex: /\.mpd$/i } }).catch(() => 0)
     if (dashCount > 0) {
-      console.log(`🔧 Migration DASH→HLS : ${dashCount} chaîne(s) à corriger...`)
+      console.log('Migration DASH->HLS : ' + dashCount + ' chaine(s) a corriger...')
       const channels = await Channel.find({ bestStreamUrl: { $regex: /\.mpd$/i } }).catch(() => [])
       let fixed = 0
       for (const ch of channels) {
         const hlsStream = (ch.streams || []).find(s => s.url && s.url.includes('.m3u8'))
         if (hlsStream) {
           ch.bestStreamUrl = hlsStream.url
-          ch.proxyUrl = `${process.env.APP_URL || 'https://nkiptv-backend-production.up.railway.app'}/api/proxy/stream?url=${encodeURIComponent(hlsStream.url)}`
+          ch.proxyUrl = (process.env.APP_URL || 'https://nkiptv-backend-production.up.railway.app') + '/api/proxy/stream?url=' + encodeURIComponent(hlsStream.url)
           await ch.save().catch(() => {})
           fixed++
         }
       }
-      console.log(`✅ Migration terminée : ${fixed}/${dashCount} corrigée(s)`)
+      console.log('Migration terminee : ' + fixed + '/' + dashCount + ' corrigee(s)')
     }
+
+    // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────
+    if (process.env.OBSERVATORY_ENABLED !== 'false') {
+      const { startScheduler: startMonitor } = require('./services/StreamMonitor')
+      const { startScheduler: startHealer } = require('./services/AutoHealer')
+      startMonitor()
+      startHealer()
+
+      if (process.env.DISCOVERY_ENABLED === 'true') {
+        const discoveryHours = parseInt(process.env.DISCOVERY_INTERVAL_HOURS) || 24
+        cron.schedule('0 0 */' + discoveryHours + ' * *', async () => {
+          console.log('Lancement decouverte planifiee...')
+          const { discover } = require('./services/SourceDiscovery')
+          discover().catch(err => console.error('Decouverte echouee:', err.message))
+        })
+        console.log('Decouverte automatique activee (toutes les ' + discoveryHours + 'h)')
+      }
+    }
+
+    // ── StreamHealer : guérison automatique des chaînes status='down' ─────────
+    const { startStreamHealer } = require('./services/streamHealer')
+    startStreamHealer()
+
   }, 3000)
-
-  // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────
-  if (process.env.OBSERVATORY_ENABLED !== 'false') {
-    const { startScheduler: startMonitor } = require('./services/StreamMonitor')
-    const { startScheduler: startHealer  } = require('./services/AutoHealer')
-    startMonitor()
-    startHealer()
-
-    // Découverte GitHub toutes les 24h si activée
-    if (process.env.DISCOVERY_ENABLED === 'true') {
-      const discoveryHours = parseInt(process.env.DISCOVERY_INTERVAL_HOURS) || 24
-      cron.schedule(`0 0 */${discoveryHours} * *`, async () => {
-        console.log('🔭 Lancement découverte planifiée...')
-        const { discover } = require('./services/SourceDiscovery')
-        discover().catch(err => console.error('Découverte échouée:', err.message))
-      })
-      console.log(`🔭 Découverte automatique activée (toutes les ${discoveryHours}h)`)
-    }
-  }
 })
 
 module.exports = app
