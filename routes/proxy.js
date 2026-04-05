@@ -221,10 +221,14 @@ router.all('/stream', optionalAuth, async (req, res) => {
       })
       const body = Buffer.concat(chunks).toString('utf-8')
 
-      const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`
       const baseUrl = decoded.substring(0, decoded.lastIndexOf('/') + 1)
 
+      // FIX BUG 2 : utiliser des chemins RELATIFS /api/proxy/stream?url=...
+      // pour que HLS.js résolve correctement depuis l'origine du backend.
+      // Avant : ${appUrl}/api/proxy/stream → si APP_URL non défini = localhost → CORS bloqué
       const proxify = (rawUrl) => {
+        // Ne pas réécrire les URLs déjà proxifiées
+        if (rawUrl.startsWith('/api/proxy/stream')) return rawUrl
         let abs
         if (/^https?:\/\//i.test(rawUrl)) {
           abs = rawUrl
@@ -233,7 +237,7 @@ router.all('/stream', optionalAuth, async (req, res) => {
         } else {
           abs = baseUrl + rawUrl
         }
-        return `${appUrl}/api/proxy/stream?url=${encodeURIComponent(abs)}`
+        return `/api/proxy/stream?url=${encodeURIComponent(abs)}`
       }
 
       const isM3U8live = !body.includes('#EXT-X-ENDLIST')
@@ -319,9 +323,9 @@ router.get('/logo', async (req, res) => {
       timeout: 10000,
       responseType: 'arraybuffer',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-        'Referer': 'https://www.wikipedia.org/',
+        // FIX BUG 1 : UA réaliste Chrome pour éviter le 503 de Wikimedia
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/*,*/*',
       },
       maxRedirects: 5,
     })
