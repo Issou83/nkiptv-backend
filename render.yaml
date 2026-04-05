@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: nkiptv-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: JWT_ACCESS_EXPIRE
+        value: 15m
+      - key: JWT_REFRESH_EXPIRE
+        value: 30d
+      - key: FRONTEND_URL
+        sync: false
+      - key: IPTV_ORG_API
+        value: https://iptv-org.github.io/api
+      - key: SYNC_INTERVAL_HOURS
+        value: "12"
+      - key: APP_URL
+        sync: false
