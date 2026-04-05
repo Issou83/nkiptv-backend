@@ -262,13 +262,26 @@ router.all('/stream', optionalAuth, async (req, res) => {
       let bodyToRewrite = isM3U8live ? trimLivePlaylist(body) : body
       // Supprimer tous les EXT-X-PROGRAM-DATE-TIME (source de confusion live sync chez HLS.js)
       bodyToRewrite = bodyToRewrite.split('\n').filter(l => !l.startsWith('#EXT-X-PROGRAM-DATE-TIME')).join('\n')
+      // Convertit une URL relative/absolue en URL absolue sans proxifier
+      const absolutify = (rawUrl) => {
+        if (/^https?:\/\//i.test(rawUrl)) return rawUrl
+        if (rawUrl.startsWith('/')) return new URL(decoded).origin + rawUrl
+        return baseUrl + rawUrl
+      }
+      const isM3U8Url = (u) => {
+        try { return /\.(m3u8|m3u)(\?|$)/i.test(new URL(u).pathname) } catch { return /\.(m3u8|m3u)(\?|$)/i.test(u) }
+      }
       const rewritten = bodyToRewrite.split('\n').map(line => {
         const trimmed = line.trim()
         if (!trimmed) return line
         if (trimmed.startsWith('#')) {
-          return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${proxify(uri)}"`)
+          // Dans les attributs URI="" : proxifier seulement si .m3u8
+          return line.replace(/URI="([^"]+)"/g, (_, uri) =>
+            isM3U8Url(uri) ? `URI="${proxify(uri)}"` : `URI="${uri}"`)
         }
-        return proxify(trimmed)
+        // Ligne de segment : proxifier si .m3u8, URL absolue directe si .ts
+        if (isM3U8Url(trimmed)) return proxify(trimmed)
+        return absolutify(trimmed)
       }).join('\n')
 
       setCorsHeaders(res)
