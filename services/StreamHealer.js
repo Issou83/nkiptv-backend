@@ -20,6 +20,7 @@
 const http  = require('http')
 const https = require('https')
 const { URL } = require('url')
+const cron    = require('node-cron')
 const Channel = require('../models/Channel')
 
 const HEAL_TIMEOUT_MS  = 8000   // 8s max pour tester un fallback
@@ -199,4 +200,38 @@ async function healChannel (channelId) {
   return { channelId, results }
 }
 
-module.exports = { healInactiveStreams, healChannel, healStream, probeUrl }
+// ── Channel-level status healer (cron 30min) ──────────────────────────────────
+async function runChannelHealCycle () {
+  console.log('🩺 [ChannelHealer] Démarrage du cycle...')
+  const channels = await Channel.find({ status: 'down', bestStreamUrl: { $exists: true, $ne: '' } })
+    .limit(50)
+    .select('id name status failCount bestStreamUrl')
+    .lean()
+
+  let healed = 0
+  for (const ch of channels) {
+    const ok = await probeUrl(ch.bestStreamUrl)
+    if (ok) {
+      await Channel.updateOne(
+        { _id: ch._id },
+        { $set: { status: 'up', failCount: 0, lastChecked: new Date() } }
+      )
+      console.log(`✅ [ChannelHealer] ${ch.name} → up`)
+      healed++
+    } else {
+      await Channel.updateOne({ _id: ch._id }, { $set: { lastChecked: new Date() } })
+    }
+  }
+
+  console.log(`🩺 [ChannelHealer] Cycle terminé — ${healed}/${channels.length} chaînes guéries`)
+  return { healed, checked: channels.length }
+}
+
+function startChannelHealer () {
+  console.log('🩺 [ChannelHealer] Scheduler démarré (toutes les 30 min)')
+  cron.schedule('*/30 * * * *', () => {
+    runChannelHealCycle().catch(err => console.error('[ChannelHealer] Erreur cycle:', err.message))
+  })
+}
+
+module.exports = { healInactiveStreams, healChannel, healStream, probeUrl, startChannelHealer, runChannelHealCycle }

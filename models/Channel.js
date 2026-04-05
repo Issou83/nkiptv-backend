@@ -72,6 +72,11 @@ const ChannelSchema = new mongoose.Schema({
   update_pattern: { type: String, default: '' },              // Fréquence/règle de mise à jour
   backend_code:   { type: String, default: '' },              // Code interne (admin only)
 
+  // ── Health (stream healer) ────────────────────────────────────────────────
+  status:      { type: String, enum: ['up', 'down'], default: 'up' },
+  failCount:   { type: Number, default: 0 },
+  lastChecked: { type: Date },
+
   // ── Sync ──────────────────────────────────────────────────────────────────
   lastSyncedAt: { type: Date, default: Date.now },
 

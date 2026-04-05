@@ -193,6 +193,54 @@ router.post('/:id/rate', auth, async (req, res) => {
   }
 })
 
+// ── POST /api/channels/:id/report-down ────────────────────────────────────────
+router.post('/:id/report-down', async (req, res) => {
+  try {
+    const channel = await Channel.findOne({ id: req.params.id })
+    if (!channel) return res.status(404).json({ success: false, message: 'Chaîne introuvable' })
+
+    channel.failCount   = (channel.failCount || 0) + 1
+    channel.lastChecked = new Date()
+    if (channel.failCount >= 3) channel.status = 'down'
+    await channel.save()
+
+    res.json({ success: true, data: { status: channel.status, failCount: channel.failCount } })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur' })
+  }
+})
+
+// ── POST /api/channels/:id/report-up ──────────────────────────────────────────
+router.post('/:id/report-up', async (req, res) => {
+  try {
+    const channel = await Channel.findOne({ id: req.params.id })
+    if (!channel) return res.status(404).json({ success: false, message: 'Chaîne introuvable' })
+
+    channel.status      = 'up'
+    channel.failCount   = 0
+    channel.lastChecked = new Date()
+    await channel.save()
+
+    res.json({ success: true, data: { status: channel.status, failCount: channel.failCount } })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur' })
+  }
+})
+
+// ── GET /api/channels/:id/status ──────────────────────────────────────────────
+router.get('/:id/status', async (req, res) => {
+  try {
+    const channel = await Channel.findOne({ id: req.params.id })
+      .select('id name status failCount lastChecked')
+      .lean()
+    if (!channel) return res.status(404).json({ success: false, message: 'Chaîne introuvable' })
+
+    res.json({ success: true, data: { status: channel.status || 'up', failCount: channel.failCount || 0, lastChecked: channel.lastChecked } })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur' })
+  }
+})
+
 // ── POST /api/channels/admin/sync ─────────────────────────────────────────────
 // Déclenche une synchronisation manuelle (admin seulement)
 router.post('/admin/sync', auth, async (req, res) => {

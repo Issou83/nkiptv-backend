@@ -179,6 +179,10 @@ app.listen(PORT, () => {
     }
   }, 3000)
 
+  // ── Channel status healer (toutes les 30min) ──────────────────────────────
+  const { startChannelHealer } = require('./services/StreamHealer')
+  startChannelHealer()
+
   // ── Observatoire : StreamMonitor + AutoHealer ─────────────────────────────
   if (process.env.OBSERVATORY_ENABLED !== 'false') {
     const { startScheduler: startMonitor } = require('./services/StreamMonitor')
