@@ -275,6 +275,11 @@ router.all('/stream', optionalAuth, async (req, res) => {
       rewritten = rewritten.replace(/#EXT-X-VERSION:\d+/g, '#EXT-X-VERSION:3')
       // Supprimer EXT-X-INDEPENDENT-SEGMENTS incompatible VERSION 8
       rewritten = rewritten.replace(/#EXT-X-INDEPENDENT-SEGMENTS\r?\n/g, '')
+      // Supprimer les pistes audio alternatives — force HLS.js à utiliser l'audio du flux vidéo
+      // Évite le bug de transmux silencieux avec les streams demuxed
+      rewritten = rewritten.replace(/#EXT-X-MEDIA:TYPE=AUDIO[^\n]*\n?/g, '')
+      // Supprimer aussi l'attribut AUDIO= dans les lignes #EXT-X-STREAM-INF
+      rewritten = rewritten.replace(/,?AUDIO="[^"]*"/g, '')
 
       setCorsHeaders(res)
       res.set({
