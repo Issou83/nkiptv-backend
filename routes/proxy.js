@@ -2,6 +2,7 @@ const express = require('express')
 const axios = require('axios')
 const https = require('https')
 const http = require('http')
+const mongoose = require('mongoose')
 const Channel = require('../models/Channel')
 const { optionalAuth } = require('../middleware/auth')
 const router = express.Router()
@@ -10,26 +11,28 @@ const TIMEOUT = 30000
 const CDN_TIMEOUT_MS = 30000   // AbortController : abandon CDN après 30 s
 const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 
-// ── Cache en mémoire pour les logos (évite les 429 Wikimedia) ────────────────
-const LOGO_CACHE_TTL = 24 * 60 * 60 * 1000 // 24h
-const LOGO_CACHE_MAX = 500
-const logoCache = new Map()
-const getCachedLogo = (url, allowStale = false) => {
-  const entry = logoCache.get(url)
-  if (!entry) return null
-  if (Date.now() - entry.ts > LOGO_CACHE_TTL) {
-    if (allowStale) return entry // retourner le stale si demandé (ex: 429)
-    logoCache.delete(url)
-    return null
-  }
-  return entry
+// ── Cache MongoDB persistant pour les logos ───────────────────────────────────
+// Stocke les images en base une seule fois — plus jamais de 429/503 Wikimedia
+const logoSchema = new mongoose.Schema({
+  url:         { type: String, unique: true, index: true },
+  data:        Buffer,
+  contentType: { type: String, default: 'image/png' },
+  cachedAt:    { type: Date, default: Date.now },
+})
+const LogoCache = mongoose.models.LogoCache || mongoose.model('LogoCache', logoSchema)
+
+// Cache mémoire court terme (évite des round-trips MongoDB pour les logos chauds)
+const MEM_TTL = 10 * 60 * 1000 // 10 min
+const memCache = new Map()
+const getMemCached = (url) => {
+  const e = memCache.get(url)
+  if (!e) return null
+  if (Date.now() - e.ts > MEM_TTL) { memCache.delete(url); return null }
+  return e
 }
-const setCachedLogo = (url, data, contentType) => {
-  if (logoCache.size >= LOGO_CACHE_MAX) {
-    const oldest = [...logoCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]
-    if (oldest) logoCache.delete(oldest[0])
-  }
-  logoCache.set(url, { data, contentType, ts: Date.now() })
+const setMemCached = (url, data, contentType) => {
+  if (memCache.size > 200) memCache.delete(memCache.keys().next().value)
+  memCache.set(url, { data, contentType, ts: Date.now() })
 }
 
 // ── Agents HTTP avec keep-alive pour réutiliser les connexions TCP/TLS ─────────
@@ -325,81 +328,48 @@ router.all('/stream', optionalAuth, async (req, res) => {
 })
 
 // ── GET /api/proxy/logo ───────────────────────────────────────────────────────
-// Proxy server-side pour les logos Wikimedia (évite les 503 en direct)
-// Usage : /api/proxy/logo?url=<encoded_wikimedia_url>
 router.get('/logo', async (req, res) => {
   const { url } = req.query
-  if (!url) {
-    setCorsHeaders(res)
-    return res.status(400).json({ success: false, message: 'URL requise' })
-  }
-
+  if (!url) { setCorsHeaders(res); return res.status(400).json({ success: false, message: 'URL requise' }) }
   let decoded
-  try { decoded = decodeURIComponent(url) } catch {
-    setCorsHeaders(res)
-    return res.status(400).json({ success: false, message: 'URL invalide' })
-  }
+  try { decoded = decodeURIComponent(url) } catch { setCorsHeaders(res); return res.status(400).json({ success: false, message: 'URL invalide' }) }
+  if (isBlockedHost(decoded)) { setCorsHeaders(res); return res.status(403).json({ success: false, message: 'Hôte non autorisé' }) }
 
-  if (isBlockedHost(decoded)) {
-    setCorsHeaders(res)
-    return res.status(403).json({ success: false, message: 'Hôte non autorisé' })
-  }
+  // 1. Cache mémoire
+  const mem = getMemCached(decoded)
+  if (mem) { setCorsHeaders(res); res.set({ 'Content-Type': mem.contentType, 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'MEM' }); return res.end(mem.data) }
 
-// Vérifier le cache
-  const cached = getCachedLogo(decoded)
-  if (cached) {
-    setCorsHeaders(res)
-    res.set({
-      'Content-Type': cached.contentType,
-      'Cache-Control': 'public, max-age=86400',
-      'Content-Length': cached.data.byteLength,
-      'X-Cache': 'HIT',
-    })
-    return res.end(cached.data)
-  }
+  // 2. Cache MongoDB persistant
+  try {
+    const dbEntry = await LogoCache.findOne({ url: decoded }).lean()
+    if (dbEntry && dbEntry.data) {
+      const buf = Buffer.isBuffer(dbEntry.data) ? dbEntry.data : Buffer.from(dbEntry.data.buffer || dbEntry.data)
+      setMemCached(decoded, buf, dbEntry.contentType)
+      setCorsHeaders(res); res.set({ 'Content-Type': dbEntry.contentType, 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'DB' }); return res.end(buf)
+    }
+  } catch (dbErr) { console.warn('[proxy/logo] DB read error:', dbErr.message) }
 
-    try {
+  // 3. Fetch depuis la source
+  try {
     const response = await axios.get(decoded, {
-      timeout: 10000,
-      responseType: 'arraybuffer',
-      headers: {
-        // FIX BUG 1 : UA réaliste Chrome pour éviter le 503 de Wikimedia
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'image/*,*/*',
-        'Referer': 'https://fr.wikipedia.org/',
-      },
+      timeout: 15000, responseType: 'arraybuffer',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', 'Accept': 'image/*,*/*', 'Referer': 'https://fr.wikipedia.org/', 'Origin': 'https://fr.wikipedia.org' },
       maxRedirects: 5,
     })
-
     const contentType = response.headers['content-type'] || 'image/png'
-    setCorsHeaders(res)
-    res.set({
-      'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=86400',
-      'Content-Length': response.data.byteLength,
-    })
     const logoBuf = Buffer.from(response.data)
-    setCachedLogo(decoded, logoBuf, contentType)
-    res.end(logoBuf)
+    LogoCache.findOneAndUpdate({ url: decoded }, { url: decoded, data: logoBuf, contentType, cachedAt: new Date() }, { upsert: true, new: true }).catch(e => console.warn('[proxy/logo] DB write error:', e.message))
+    setMemCached(decoded, logoBuf, contentType)
+    setCorsHeaders(res); res.set({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=604800', 'Content-Length': logoBuf.byteLength }); return res.end(logoBuf)
   } catch (err) {
-    const is429 = err.response?.status === 429
-    console.warn(`[proxy/logo] failed (${err.response?.status || err.message}) — ${decoded.slice(0, 80)}`)
-
-    // Sur 429 : tenter de servir le cache stale (même expiré) avant de rediriger
-    if (is429) {
-      const stale = getCachedLogo(decoded, true)
-      if (stale) {
-        setCorsHeaders(res)
-        res.set({
-          'Content-Type': stale.contentType,
-          'Cache-Control': 'public, max-age=3600',
-          'X-Cache': 'STALE',
-        })
-        return res.end(stale.data)
+    console.warn(`[proxy/logo] fetch failed (${err.response?.status || err.message}) — ${decoded.slice(0, 80)}`)
+    try {
+      const stale = await LogoCache.findOne({ url: decoded }).lean()
+      if (stale && stale.data) {
+        const buf = Buffer.isBuffer(stale.data) ? stale.data : Buffer.from(stale.data.buffer || stale.data)
+        setCorsHeaders(res); res.set({ 'Content-Type': stale.contentType, 'Cache-Control': 'public, max-age=3600', 'X-Cache': 'STALE' }); return res.end(buf)
       }
-    }
-
-    // Redirect vers l'URL originale — navigateur fetch directement
+    } catch (_) {}
     return res.redirect(302, decoded)
   }
 })

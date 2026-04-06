@@ -1,0 +1,19 @@
+name: nkiptv-backend
+services:
+  - name: nkiptv-backend
+    type: web
+    git:
+      repository: github.com/Issou83/nkiptv-backend
+      branch: main
+    run:
+      command: node server.js
+    ports:
+      - port: 3001
+        protocol: http
+    regions:
+      - par
+    env:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
