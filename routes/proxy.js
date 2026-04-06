@@ -279,10 +279,19 @@ router.all('/stream', optionalAuth, async (req, res) => {
       // Supprimer EXT-X-INDEPENDENT-SEGMENTS incompatible VERSION 8
       rewritten = rewritten.replace(/#EXT-X-INDEPENDENT-SEGMENTS\r?\n/g, '')
       // Supprimer les pistes audio alternatives — force HLS.js à utiliser l'audio du flux vidéo
-      // Évite le bug de transmux silencieux avec les streams demuxed
-      rewritten = rewritten.replace(/#EXT-X-MEDIA:TYPE=AUDIO[^\n]*\n?/g, '')
+      // Évite le bug de transmux silencieux avec les streams demuxed (CRLF-robuste)
+      rewritten = rewritten.replace(/#EXT-X-MEDIA:TYPE=AUDIO[^\r\n]*\r?\n/g, '')
       // Supprimer aussi l'attribut AUDIO= dans les lignes #EXT-X-STREAM-INF
       rewritten = rewritten.replace(/,?AUDIO="[^"]*"/g, '')
+      // Strip les #EXT-X-STREAM-INF sans codec vidéo (audio-only streams)
+      rewritten = rewritten.replace(
+        /#EXT-X-STREAM-INF:[^\r\n]*\r?\n[^\r\n]*\r?\n/g,
+        (block) => {
+          // Garder uniquement les variants avec codec vidéo (avc, hvc, hevc, vp9, av1)
+          if (/(?:avc|hvc|hevc|vp09|av01)/i.test(block)) return block
+          return ''
+        }
+      )
 
       setCorsHeaders(res)
       res.set({
