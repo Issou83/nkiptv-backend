@@ -192,6 +192,14 @@ router.all('/stream', optionalAuth, async (req, res) => {
     }
   } catch (_) { }
 
+  // Construire le Referer/Origin depuis l'URL upstream
+  let refererUrl = decoded
+  try { refererUrl = new URL(decoded).origin + '/' } catch (_) {}
+  const originUrl = refererUrl.replace(/\/$/, '')
+
+  // Détecter si c'est un manifest M3U8 depuis l'URL (avant la requête) pour conditionner les params
+  const likelyM3U8 = detectM3U8(decoded, '')
+
   try {
     const controller = new AbortController()
     const cdnTimer = setTimeout(() => controller.abort(), CDN_TIMEOUT_MS)
@@ -206,14 +214,15 @@ router.all('/stream', optionalAuth, async (req, res) => {
         httpAgent,
         httpsAgent,
         headers: {
-          'User-Agent': 'VLC/3.0.0 LibVLC/3.0.0',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           'Accept': '*/*',
           'Accept-Encoding': 'identity',
-          'Referer': decoded,
+          'Referer': refererUrl,
+          'Origin': originUrl,
           'Cache-Control': 'no-cache',
           'Pragma': 'no-cache',
         },
-        params: { _t: Date.now() },
+        params: likelyM3U8 ? { _t: Date.now() } : {},
         maxRedirects: 5,
       })
     } catch (fetchErr) {
