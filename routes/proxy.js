@@ -14,10 +14,14 @@ const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 const LOGO_CACHE_TTL = 24 * 60 * 60 * 1000 // 24h
 const LOGO_CACHE_MAX = 500
 const logoCache = new Map()
-const getCachedLogo = (url) => {
+const getCachedLogo = (url, allowStale = false) => {
   const entry = logoCache.get(url)
   if (!entry) return null
-  if (Date.now() - entry.ts > LOGO_CACHE_TTL) { logoCache.delete(url); return null }
+  if (Date.now() - entry.ts > LOGO_CACHE_TTL) {
+    if (allowStale) return entry // retourner le stale si demandé (ex: 429)
+    logoCache.delete(url)
+    return null
+  }
   return entry
 }
 const setCachedLogo = (url, data, contentType) => {
@@ -378,20 +382,21 @@ router.get('/logo', async (req, res) => {
     setCachedLogo(decoded, logoBuf, contentType)
     res.end(logoBuf)
   } catch (err) {
-    // Render IPs bloquées par certains CDN (ex. Wikimedia).
-    // Redirect 302 : le navigateur charge l'image directement.
-    console.warn(`[proxy/logo] failed, redirecting to origin: ${err.message} — ${decoded.slice(0, 80)}`)
+    const is429 = err.response?.status === 429
+    console.warn(`[proxy/logo] failed (${err.response?.status || err.message}) — ${decoded.slice(0, 80)}`)
 
-    // SVG uniquement si decoded absent (cas théoriquement impossible vu la validation)
-    if (!decoded) {
-      const placeholderSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="8" fill="#1e2a3a"/>
-  <rect x="12" y="16" width="40" height="28" rx="3" fill="#2d3f56"/>
-  <circle cx="32" cy="30" r="8" fill="#4a6080"/>
-  <polygon points="28,26 28,34 38,30" fill="#7ab3e0"/>
-</svg>`
-      setCorsHeaders(res)
-      return res.set({ 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store, no-cache', 'X-Logo-Fallback': 'true' }).send(placeholderSvg)
+    // Sur 429 : tenter de servir le cache stale (même expiré) avant de rediriger
+    if (is429) {
+      const stale = getCachedLogo(decoded, true)
+      if (stale) {
+        setCorsHeaders(res)
+        res.set({
+          'Content-Type': stale.contentType,
+          'Cache-Control': 'public, max-age=3600',
+          'X-Cache': 'STALE',
+        })
+        return res.end(stale.data)
+      }
     }
 
     // Redirect vers l'URL originale — navigateur fetch directement
