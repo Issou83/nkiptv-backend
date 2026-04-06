@@ -2,6 +2,7 @@ const express = require('express')
 const axios = require('axios')
 const https = require('https')
 const http = require('http')
+const mongoose = require('mongoose')
 const Channel = require('../models/Channel')
 const { optionalAuth } = require('../middleware/auth')
 const router = express.Router()
@@ -10,27 +11,14 @@ const TIMEOUT = 30000
 const CDN_TIMEOUT_MS = 30000   // AbortController : abandon CDN après 30 s
 const BLOCKED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
 
-// ── Cache en mémoire pour les logos (évite les 429 Wikimedia) ────────────────
-const LOGO_CACHE_TTL = 24 * 60 * 60 * 1000 // 24h
-const LOGO_CACHE_MAX = 500
-const logoCache = new Map()
-const getCachedLogo = (url, allowStale = false) => {
-  const entry = logoCache.get(url)
-  if (!entry) return null
-  if (Date.now() - entry.ts > LOGO_CACHE_TTL) {
-    if (allowStale) return entry // retourner le stale si demandé (ex: 429)
-    logoCache.delete(url)
-    return null
-  }
-  return entry
-}
-const setCachedLogo = (url, data, contentType) => {
-  if (logoCache.size >= LOGO_CACHE_MAX) {
-    const oldest = [...logoCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]
-    if (oldest) logoCache.delete(oldest[0])
-  }
-  logoCache.set(url, { data, contentType, ts: Date.now() })
-}
+// ── Cache MongoDB permanent pour les logos ────────────────────────────────────
+const logoSchema = new mongoose.Schema({
+  url: { type: String, unique: true, index: true },
+  data: Buffer,
+  contentType: { type: String, default: 'image/png' },
+  cachedAt: { type: Date, default: Date.now }
+})
+const LogoCache = mongoose.models.LogoCache || mongoose.model('LogoCache', logoSchema)
 
 // ── Agents HTTP avec keep-alive pour réutiliser les connexions TCP/TLS ─────────
 // Sans ça, chaque segment crée une nouvelle connexion → +100-200ms de latence/segment
@@ -325,7 +313,7 @@ router.all('/stream', optionalAuth, async (req, res) => {
 })
 
 // ── GET /api/proxy/logo ───────────────────────────────────────────────────────
-// Proxy server-side pour les logos Wikimedia (évite les 503 en direct)
+// Cache MongoDB permanent pour les logos Wikimedia
 // Usage : /api/proxy/logo?url=<encoded_wikimedia_url>
 router.get('/logo', async (req, res) => {
   const { url } = req.query
@@ -345,49 +333,59 @@ router.get('/logo', async (req, res) => {
     return res.status(403).json({ success: false, message: 'Hôte non autorisé' })
   }
 
-// Vérifier le cache
-  const cached = getCachedLogo(decoded)
-  if (cached) {
-    setCorsHeaders(res)
-    res.set({
-      'Content-Type': cached.contentType,
-      'Cache-Control': 'public, max-age=86400',
-      'Content-Length': cached.data.byteLength,
-      'X-Cache': 'HIT',
-    })
-    return res.end(cached.data)
+  // Vérifier le cache MongoDB
+  try {
+    const cached = await LogoCache.findOne({ url: decoded }).lean()
+    if (cached) {
+      setCorsHeaders(res)
+      res.set({
+        'Content-Type': cached.contentType,
+        'Cache-Control': 'public, max-age=604800',
+        'Content-Length': cached.data.byteLength,
+        'X-Cache': 'HIT',
+      })
+      return res.end(cached.data.buffer ? Buffer.from(cached.data.buffer) : cached.data)
+    }
+  } catch (dbErr) {
+    console.warn('[proxy/logo] MongoDB read error:', dbErr.message)
   }
 
-    try {
+  try {
     const response = await axios.get(decoded, {
-      timeout: 10000,
+      timeout: 15000,
       responseType: 'arraybuffer',
       headers: {
-        // FIX BUG 1 : UA réaliste Chrome pour éviter le 503 de Wikimedia
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'image/*,*/*',
-        'Referer': 'https://fr.wikipedia.org/',
+        'Referer': 'https://www.wikipedia.org/',
+        'Origin': 'https://www.wikipedia.org',
       },
       maxRedirects: 5,
     })
 
     const contentType = response.headers['content-type'] || 'image/png'
+    const logoBuf = Buffer.from(response.data)
+
+    // Stocker en MongoDB (fire & forget)
+    LogoCache.findOneAndUpdate(
+      { url: decoded },
+      { url: decoded, data: logoBuf, contentType, cachedAt: new Date() },
+      { upsert: true, new: true }
+    ).catch(e => console.warn('[proxy/logo] MongoDB write error:', e.message))
+
     setCorsHeaders(res)
     res.set({
       'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=86400',
-      'Content-Length': response.data.byteLength,
+      'Cache-Control': 'public, max-age=604800',
+      'Content-Length': logoBuf.byteLength,
     })
-    const logoBuf = Buffer.from(response.data)
-    setCachedLogo(decoded, logoBuf, contentType)
-    res.end(logoBuf)
+    return res.end(logoBuf)
   } catch (err) {
-    const is429 = err.response?.status === 429
-    console.warn(`[proxy/logo] failed (${err.response?.status || err.message}) — ${decoded.slice(0, 80)}`)
+    console.warn(`[proxy/logo] fetch failed (${err.response?.status || err.message}) — ${decoded.slice(0, 80)}`)
 
-    // Sur 429 : tenter de servir le cache stale (même expiré) avant de rediriger
-    if (is429) {
-      const stale = getCachedLogo(decoded, true)
+    // Tenter le cache stale en cas d'échec
+    try {
+      const stale = await LogoCache.findOne({ url: decoded }).lean()
       if (stale) {
         setCorsHeaders(res)
         res.set({
@@ -395,11 +393,12 @@ router.get('/logo', async (req, res) => {
           'Cache-Control': 'public, max-age=3600',
           'X-Cache': 'STALE',
         })
-        return res.end(stale.data)
+        return res.end(stale.data.buffer ? Buffer.from(stale.data.buffer) : stale.data)
       }
-    }
+    } catch (_) {}
 
-    // Redirect vers l'URL originale — navigateur fetch directement
+    // Fallback : redirect vers l'URL originale
+    setCorsHeaders(res)
     return res.redirect(302, decoded)
   }
 })
