@@ -210,7 +210,10 @@ router.all('/stream', optionalAuth, async (req, res) => {
           'Accept': '*/*',
           'Accept-Encoding': 'identity',
           'Referer': decoded,
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
         },
+        params: { _t: Date.now() },
         maxRedirects: 5,
       })
     } catch (fetchErr) {
@@ -283,8 +286,10 @@ router.all('/stream', optionalAuth, async (req, res) => {
 
       setCorsHeaders(res)
       res.set({
-        'Content-Type': 'application/x-mpegURL',
-        'Cache-Control': 'no-cache, no-store',
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
       })
       return res.send(rewritten)
     }
