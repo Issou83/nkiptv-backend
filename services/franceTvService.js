@@ -1,114 +1,188 @@
 /**
- * France TV live stream service
+ * NKiptv — Service France TV live
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Fournit des URLs HLS fraîches pour France 2/3/4/5 en récupérant les
+ * playlists master signées depuis le repo schumijo/iptv (GitHub).
  *
- * Tente d'obtenir les URLs signées depuis l'API player.france.tv.
- * Si l'API est inaccessible ou retourne une erreur, utilise les URLs
- * GitHub community (schumijo/iptv) en fallback.
+ * Les tokens HMAC intégrés dans ces masters ont une expiry ~1 an ;
+ * on rafraîchit quand même toutes les 4 jours pour détecter d'éventuelles
+ * rotations anticipées.
  *
- * Cache mémoire TTL 4 jours pour éviter de spam l'API.
+ * API France TV (player.france.tv/api/live/{channel}) utilisée comme
+ * première tentative ; GitHub comme fallback.
+ *
+ * Exports :
+ *   getStreamUrl(nameOrId)   → Promise<string|null>   URL HLS fraîche (cachée)
+ *   getChannelKey(nameOrId)  → string|null            Clé interne (ex: 'france-2')
+ *   startRefreshSchedule()   → void                   Lance le cron 4 jours
  */
+'use strict'
+
 const axios = require('axios')
 
-const TTL_MS = 4 * 24 * 60 * 60 * 1000 // 4 jours
+// ── Constantes ────────────────────────────────────────────────────────────────
 
-// Mapping slug france.tv → URL fallback GitHub
-const CHANNELS = {
-  'france-2':    'https://raw.githubusercontent.com/schumijo/iptv/main/playlists/francetv/france2.m3u8',
-  'france-3':    'https://raw.githubusercontent.com/schumijo/iptv/main/playlists/francetv/france3.m3u8',
-  'france-4':    'https://raw.githubusercontent.com/schumijo/iptv/main/playlists/francetv/france4.m3u8',
-  'france-5':    'https://raw.githubusercontent.com/schumijo/iptv/main/playlists/francetv/france5.m3u8',
-  'france-info': 'https://raw.githubusercontent.com/schumijo/iptv/main/playlists/francetv/franceinfo.m3u8',
+const TTL_MS = 4 * 24 * 60 * 60 * 1000  // 4 jours
+
+const GITHUB_BASE = 'https://raw.githubusercontent.com/schumijo/iptv/main/playlists/francetv/'
+
+// Clés internes → fichier GitHub
+const CHANNEL_FILES = {
+  'france-2':    'france2.m3u8',
+  'france-3':    'france3.m3u8',
+  'france-4':    'france4.m3u8',
+  'france-5':    'france5.m3u8',
+  'france-info': 'franceinfo.m3u8',
 }
 
-const cache = new Map() // slug → { url, ts }
+// Détection par nom de chaîne ou id MongoDB
+const MATCHERS = [
+  { key: 'france-2',    pattern: /^france\s*2$/i,    ids: ['France2.fr'] },
+  { key: 'france-3',    pattern: /^france\s*3$/i,    ids: ['France3.fr'] },
+  { key: 'france-4',    pattern: /^france\s*4$/i,    ids: ['France4.fr'] },
+  { key: 'france-5',    pattern: /^france\s*5$/i,    ids: ['France5.fr'] },
+  { key: 'france-info', pattern: /france.*info/i,    ids: ['FranceInfoTV.fr'] },
+]
+
+// ── Cache mémoire ─────────────────────────────────────────────────────────────
+// { 'france-2': { url: 'https://...', cachedAt: timestamp } }
+const cache = new Map()
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Tente de récupérer l'URL HLS live depuis l'API player.france.tv.
- * @param {string} slug  ex: 'france-2'
- * @returns {Promise<string|null>} URL HLS ou null si indisponible
+ * Retourne la clé interne ('france-2', etc.) depuis un nom ou id de chaîne.
+ * @param {string} nameOrId
+ * @returns {string|null}
  */
-async function fetchFromApi(slug) {
-  try {
-    const res = await axios.get(`https://player.france.tv/api/live/${slug}`, {
-      timeout: 8000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://www.france.tv/',
-        'Origin': 'https://www.france.tv',
-      },
-    })
-    const data = res.data
-    // L'API retourne typiquement { url, token, ... } ou { hls, ... }
-    const url = data?.url || data?.hls || data?.stream_url || data?.manifest_url
-    if (url && typeof url === 'string' && url.includes('.m3u8')) {
-      console.log(`[franceTv] API OK pour ${slug}: ${url.slice(0, 80)}`)
-      return url
-    }
-    console.warn(`[franceTv] API ${slug}: réponse sans URL HLS valide`, JSON.stringify(data).slice(0, 200))
-    return null
-  } catch (err) {
-    console.warn(`[franceTv] API ${slug} inaccessible: ${err.message}`)
-    return null
+function getChannelKey(nameOrId) {
+  if (!nameOrId) return null
+  for (const { key, pattern, ids } of MATCHERS) {
+    if (ids.includes(nameOrId) || pattern.test(nameOrId)) return key
   }
-}
-
-/**
- * Retourne l'URL HLS live pour un slug France TV.
- * Utilise le cache mémoire (TTL 4 jours) puis l'API, sinon le fallback GitHub.
- * @param {string} slug  ex: 'france-2'
- * @returns {Promise<string>} URL HLS
- */
-async function getLiveUrl(slug) {
-  // Cache valide ?
-  const cached = cache.get(slug)
-  if (cached && Date.now() - cached.ts < TTL_MS) {
-    return cached.url
-  }
-
-  // Essai API
-  const apiUrl = await fetchFromApi(slug)
-  if (apiUrl) {
-    cache.set(slug, { url: apiUrl, ts: Date.now() })
-    return apiUrl
-  }
-
-  // Fallback GitHub
-  const fallback = CHANNELS[slug]
-  if (fallback) {
-    console.log(`[franceTv] Fallback GitHub pour ${slug}: ${fallback}`)
-    cache.set(slug, { url: fallback, ts: Date.now() })
-    return fallback
-  }
-
-  throw new Error(`[franceTv] Aucune URL disponible pour le slug: ${slug}`)
-}
-
-/**
- * Détecte si une URL de stream appartient à France TV.
- * @param {string} url
- * @returns {string|null} slug France TV ou null
- */
-function detectFranceTvSlug(url) {
-  if (!url) return null
-  const lower = url.toLowerCase()
-  if (!lower.includes('simulcast') && !lower.includes('ftven.fr') && !lower.includes('francetv')) return null
-
-  if (lower.includes('france-2') || lower.includes('france2'))     return 'france-2'
-  if (lower.includes('france-3') || lower.includes('france3'))     return 'france-3'
-  if (lower.includes('france-4') || lower.includes('france4'))     return 'france-4'
-  if (lower.includes('france-5') || lower.includes('france5'))     return 'france-5'
-  if (lower.includes('france-info') || lower.includes('franceinfo')) return 'france-info'
-
   return null
 }
 
 /**
- * Invalide le cache pour un slug (utile si le stream est offline).
- * @param {string} slug
+ * Extrait la première URL de rendu vidéo depuis un master M3U8.
+ * Retourne null si aucune n'est trouvée.
  */
-function invalidateCache(slug) {
-  cache.delete(slug)
+function extractFirstRenditionUrl(m3u8Text) {
+  const lines = m3u8Text.split('\n')
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
+      const url = lines[i + 1]?.trim()
+      if (url && /^https?:\/\//i.test(url)) return url
+    }
+  }
+  return null
 }
 
-module.exports = { getLiveUrl, detectFranceTvSlug, invalidateCache, CHANNELS }
+/**
+ * Tente de récupérer une URL HLS via l'API France TV officielle.
+ * Retourne null si l'API est inaccessible ou si la réponse est invalide.
+ */
+async function fetchFromFranceTvApi(channelKey) {
+  const apiUrl = `https://player.france.tv/api/live/${channelKey}`
+  try {
+    const { data } = await axios.get(apiUrl, { timeout: 8000 })
+
+    // La structure peut varier — on cherche un champ url contenant .m3u8
+    const tryPaths = [
+      data?.url,
+      data?.streams?.[0]?.url,
+      data?.stream?.url,
+      data?.hls,
+    ]
+    const url = tryPaths.find(u => u && typeof u === 'string' && u.includes('.m3u8'))
+    if (url) {
+      console.log(`[FranceTV] ✅ API officielle — ${channelKey}: ${url.slice(0, 80)}`)
+      return url
+    }
+  } catch (_) {
+    // API inaccessible ou inexistante — silencieux, on passe au fallback
+  }
+  return null
+}
+
+/**
+ * Récupère l'URL HLS depuis le repo schumijo (GitHub) en extrayant
+ * la première rendu du master M3U8.
+ */
+async function fetchFromGithub(channelKey) {
+  const file = CHANNEL_FILES[channelKey]
+  if (!file) return null
+
+  const masterUrl = GITHUB_BASE + file
+  try {
+    const { data } = await axios.get(masterUrl, { timeout: 10000, responseType: 'text' })
+    const rendition = extractFirstRenditionUrl(data)
+    if (rendition) {
+      console.log(`[FranceTV] ✅ GitHub fallback — ${channelKey}: ${rendition.slice(0, 80)}`)
+      return rendition
+    }
+    // Master sans rendu lisible → retourner le master lui-même (le proxy le gère)
+    console.log(`[FranceTV] ⚠️  ${channelKey}: master sans rendu — retourne master URL`)
+    return masterUrl
+  } catch (err) {
+    console.error(`[FranceTV] ❌ GitHub fetch échoué pour ${channelKey}:`, err.message)
+    return null
+  }
+}
+
+/**
+ * Récupère et met en cache l'URL pour une clé France TV.
+ * Ordre : API officielle → GitHub fallback.
+ */
+async function fetchAndCache(channelKey) {
+  const url =
+    (await fetchFromFranceTvApi(channelKey)) ||
+    (await fetchFromGithub(channelKey))
+
+  if (url) {
+    cache.set(channelKey, { url, cachedAt: Date.now() })
+  } else {
+    console.error(`[FranceTV] ❌ Impossible de récupérer un stream pour ${channelKey}`)
+  }
+  return url || null
+}
+
+// ── API publique ──────────────────────────────────────────────────────────────
+
+/**
+ * Retourne l'URL HLS fraîche pour une chaîne France TV.
+ * @param {string} nameOrId  Nom de chaîne ('France 2', 'france-2') ou id MongoDB ('France2.fr')
+ * @returns {Promise<string|null>}
+ */
+async function getStreamUrl(nameOrId) {
+  const key = getChannelKey(nameOrId)
+  if (!key) return null
+
+  const cached = cache.get(key)
+  if (cached && Date.now() - cached.cachedAt < TTL_MS) {
+    return cached.url
+  }
+
+  return fetchAndCache(key)
+}
+
+/**
+ * Rafraîchit toutes les URLs France TV et met à jour le cache.
+ */
+async function refreshAll() {
+  console.log('[FranceTV] 🔄 Refresh de toutes les chaînes France TV...')
+  await Promise.all(Object.keys(CHANNEL_FILES).map(key => fetchAndCache(key)))
+  console.log('[FranceTV] ✅ Refresh terminé')
+}
+
+/**
+ * Lance le refresh au démarrage et toutes les 4 jours.
+ * À appeler une seule fois depuis server.js.
+ */
+function startRefreshSchedule() {
+  // Premier refresh en différé (3 s) pour ne pas bloquer le démarrage
+  setTimeout(refreshAll, 3000)
+  setInterval(refreshAll, TTL_MS)
+}
+
+module.exports = { getStreamUrl, getChannelKey, refreshAll, startRefreshSchedule, MATCHERS }
