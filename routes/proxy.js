@@ -5,6 +5,7 @@ const http = require('http')
 const mongoose = require('mongoose')
 const Channel = require('../models/Channel')
 const { optionalAuth } = require('../middleware/auth')
+const { getLiveUrl, detectFranceTvSlug, invalidateCache } = require('../services/franceTvService')
 const router = express.Router()
 
 const TIMEOUT = 30000
@@ -128,9 +129,21 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
     for (const stream of sorted) {
       if (isBlockedHost(stream.url)) continue
       try {
+        // France TV : remplacer par URL signée fraîche si le stream vient de France TV
+        let streamUrl = stream.url
+        const ftSlug = detectFranceTvSlug(streamUrl)
+        if (ftSlug) {
+          try {
+            streamUrl = await getLiveUrl(ftSlug)
+            console.log(`[proxy/best] France TV ${ftSlug} → ${streamUrl.slice(0, 80)}`)
+          } catch (ftErr) {
+            console.warn(`[proxy/best] franceTvService error for ${ftSlug}:`, ftErr.message)
+            // On continue avec l'URL DB si le service échoue
+          }
+        }
+
         // Rediriger vers /stream?url=... pour bénéficier de la réécriture M3U8
-        const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`
-        return res.redirect(302, `${appUrl}/api/proxy/stream?url=${encodeURIComponent(stream.url)}`)
+        return res.redirect(302, `/api/proxy/stream?url=${encodeURIComponent(streamUrl)}`)
       } catch { continue }
     }
 
