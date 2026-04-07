@@ -191,6 +191,10 @@ app.listen(PORT, () => {
     const { startStreamHealer } = require('./services/streamHealer')
     startStreamHealer()
 
+    // ── France TV : refresh des URLs signées toutes les 4 jours ───────────────
+    const { startRefreshSchedule } = require('./services/franceTvService')
+    startRefreshSchedule()
+
   }, 3000)
 })
 

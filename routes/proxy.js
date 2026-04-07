@@ -5,6 +5,7 @@ const http = require('http')
 const mongoose = require('mongoose')
 const Channel = require('../models/Channel')
 const { optionalAuth } = require('../middleware/auth')
+const franceTvService = require('../services/franceTvService')
 const router = express.Router()
 
 const TIMEOUT = 30000
@@ -117,6 +118,15 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
     if (!channel || !channel.streams?.length) {
       setCorsHeaders(res)
       return res.status(404).json({ success: false, message: 'Aucun stream disponible' })
+    }
+
+    // ── France TV : URL signée fraîche (France 2/3/4/5) ──────────────────────
+    const ftvUrl = await franceTvService.getStreamUrl(channel.id)
+      || await franceTvService.getStreamUrl(channel.name)
+    if (ftvUrl) {
+      setCorsHeaders(res)
+      const appUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3001}`
+      return res.redirect(302, `${appUrl}/api/proxy/stream?url=${encodeURIComponent(ftvUrl)}`)
     }
 
     // Essayer les streams dans l'ordre (d'abord online, puis unknown)
