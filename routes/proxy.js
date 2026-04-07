@@ -23,7 +23,7 @@ const logoSchema = new mongoose.Schema({
 const LogoCache = mongoose.models.LogoCache || mongoose.model('LogoCache', logoSchema)
 
 // Cache mémoire court terme (évite des round-trips MongoDB pour les logos chauds)
-const MEM_TTL = 10 * 60 * 1000 // 10 min
+const MEM_TTL = 24 * 60 * 60 * 1000 // 24h (logos rarely change)
 const memCache = new Map()
 const getMemCached = (url) => {
   const e = memCache.get(url)
@@ -32,7 +32,7 @@ const getMemCached = (url) => {
   return e
 }
 const setMemCached = (url, data, contentType) => {
-  if (memCache.size > 200) memCache.delete(memCache.keys().next().value)
+    if (memCache.size > 500) memCache.delete(memCache.keys().next().value)
   memCache.set(url, { data, contentType, ts: Date.now() })
 }
 
