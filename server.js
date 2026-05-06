@@ -27,6 +27,7 @@ connectDB()
 // ── Sécurité ──────────────────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: false, // Désactivé pour le streaming HLS
 }))
 

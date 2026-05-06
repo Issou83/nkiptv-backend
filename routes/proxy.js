@@ -48,6 +48,7 @@ const setCorsHeaders = (res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type')
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range')
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
 }
 
 // ── Preflight OPTIONS ─────────────────────────────────────────────────────────
