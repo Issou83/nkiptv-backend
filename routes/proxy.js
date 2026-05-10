@@ -141,7 +141,7 @@ router.get('/best/:channelId', optionalAuth, async (req, res) => {
       try {
         // France TV : remplacer par URL signée fraîche si le stream vient de France TV
         let streamUrl = stream.url
-        const ftSlug = detectFranceTvSlug(streamUrl)
+        const ftSlug = null
         if (ftSlug) {
           try {
             streamUrl = await getLiveUrl(ftSlug)
